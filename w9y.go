@@ -1,7 +1,6 @@
 package w9y
 
 import (
-	"archive/tar"
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
@@ -66,13 +65,13 @@ func Run(args []string) error {
 func usage() error {
 	fmt.Fprintln(os.Stderr, `usage:
   w9y upload [--to /name.wasm] file.wasm
-  w9y backup [--data-dir data] backup.tar
-  w9y restore [--data-dir data] backup.tar
+  w9y backup [dest-dir]
+  w9y restore <backup-dir>
 
 env:
   PORT      start server mode on this port when present
   DATA_DIR  server storage directory (default data)
-  HOST      remote server endpoint for upload`)
+  HOST      remote server endpoint for upload, backup, and restore`)
 	return nil
 }
 
@@ -188,143 +187,167 @@ func remoteFileExists(client *http.Client, host, remotePath string) (bool, error
 
 func backup(args []string) error {
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
-	dataDir := fs.String("data-dir", getenv("DATA_DIR", defaultDataDir), "data directory to back up")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 1 {
-		return errors.New("backup requires exactly one tarball path")
+	host := os.Getenv("HOST")
+	if host == "" {
+		return errors.New("HOST is required for backup")
 	}
-	return backupData(*dataDir, fs.Arg(0))
+	destDir := fs.Arg(0)
+	if destDir == "" {
+		destDir = "backup-" + time.Now().Format("20060102-150405")
+	}
+	return backupRemote(http.DefaultClient, host, destDir)
 }
 
 func restore(args []string) error {
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
-	dataDir := fs.String("data-dir", getenv("DATA_DIR", defaultDataDir), "data directory to restore to")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("restore requires exactly one tarball path")
+		return errors.New("restore requires exactly one backup directory")
 	}
-	return restoreData(*dataDir, fs.Arg(0))
+	host := os.Getenv("HOST")
+	if host == "" {
+		return errors.New("HOST is required for restore")
+	}
+	return restoreRemote(http.DefaultClient, host, fs.Arg(0))
 }
 
-func backupData(dataDir, tarball string) error {
-	out, err := os.Create(tarball)
+func backupRemote(client *http.Client, host, destDir string) error {
+	u, err := url.Parse(host)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 
-	tw := tar.NewWriter(out)
-	defer tw.Close()
-
-	return filepath.WalkDir(dataDir, func(filePath string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if filePath == dataDir {
-			return nil
-		}
-		rel, err := filepath.Rel(dataDir, filePath)
-		if err != nil {
-			return err
-		}
-		name := filepath.ToSlash(rel)
-
-		info, err := os.Stat(filePath)
-		if err != nil {
-			return err
-		}
-		hdr, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			return err
-		}
-		hdr.Name = name
-		if err := tw.WriteHeader(hdr); err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return nil
-		}
-		in, err := os.Open(filePath)
-		if err != nil {
-			return err
-		}
-		_, copyErr := io.Copy(tw, in)
-		closeErr := in.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		return closeErr
-	})
-}
-
-func restoreData(dataDir, tarball string) error {
-	in, err := os.Open(tarball)
+	resp, err := client.Get(u.String())
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer resp.Body.Close()
 
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+	var items []struct {
+		Path string `json:"path"`
+		SHA  string `json:"sha"`
+		Time int64  `json:"time"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
 		return err
 	}
 
-	tr := tar.NewReader(in)
-	for {
-		hdr, err := tr.Next()
-		if errors.Is(err, io.EOF) {
-			break
+	m := &mapping{Entries: make(map[string]entry, len(items))}
+	for _, item := range items {
+		m.Entries[item.Path] = entry{SHA: item.SHA, Time: item.Time}
+	}
+	if err := saveMapping(destDir, m); err != nil {
+		return err
+	}
+
+	blobClient := client
+	if tr, ok := http.DefaultTransport.(*http.Transport); ok {
+		clone := tr.Clone()
+		clone.DisableCompression = true
+		blobClient = &http.Client{Transport: clone}
+	}
+
+	seen := make(map[string]bool, len(items))
+	for _, item := range items {
+		if seen[item.SHA] {
+			continue
 		}
+		seen[item.SHA] = true
+
+		blobU, _ := url.Parse(host)
+		blobU.Path, _ = url.JoinPath(blobU.Path, blobRemotePath(item.SHA, true))
+		blobResp, err := blobClient.Get(blobU.String())
 		if err != nil {
-			return err
+			return fmt.Errorf("download blob %s: %v", item.SHA, err)
 		}
-		dst, err := safeTarPath(dataDir, hdr.Name)
-		if err != nil {
-			return err
+		gzData, readErr := io.ReadAll(blobResp.Body)
+		blobResp.Body.Close()
+		if blobResp.StatusCode != http.StatusOK {
+			return fmt.Errorf("download blob %s: %s", item.SHA, blobResp.Status)
+		}
+		if readErr != nil {
+			return fmt.Errorf("read blob %s: %v", item.SHA, readErr)
 		}
 
-		switch hdr.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(dst, os.FileMode(hdr.Mode)); err != nil {
-				return err
-			}
-		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-				return err
-			}
-			out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode))
-			if err != nil {
-				return err
-			}
-			_, copyErr := io.Copy(out, tr)
-			closeErr := out.Close()
-			if copyErr != nil {
-				return copyErr
-			}
-			if closeErr != nil {
-				return closeErr
-			}
-		default:
-			return fmt.Errorf("unsupported tar entry %q", hdr.Name)
+		gzPath := blobPath(destDir, item.SHA, true)
+		if err := os.MkdirAll(filepath.Dir(gzPath), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(gzPath, gzData, 0o644); err != nil {
+			return err
 		}
 	}
 
 	return nil
 }
 
-func safeTarPath(dataDir, name string) (string, error) {
-	slashName := filepath.ToSlash(name)
-	if path.IsAbs(slashName) {
-		return "", fmt.Errorf("invalid tar path %q", name)
+func restoreRemote(client *http.Client, host, backupDir string) error {
+	m, err := loadMapping(backupDir)
+	if err != nil {
+		return err
 	}
-	clean := path.Clean(slashName)
-	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
-		return "", fmt.Errorf("invalid tar path %q", name)
+
+	type blobEntry struct {
+		path string
+		time int64
 	}
-	return filepath.Join(dataDir, filepath.FromSlash(clean)), nil
+	shaToEntries := make(map[string][]blobEntry, len(m.Entries))
+	for p, e := range m.Entries {
+		shaToEntries[e.SHA] = append(shaToEntries[e.SHA], blobEntry{p, e.Time})
+	}
+
+	for sha, entries := range shaToEntries {
+		gzPath := blobPath(backupDir, sha, true)
+		gzData, err := os.ReadFile(gzPath)
+		if err != nil {
+			return fmt.Errorf("missing blob %s in backup: %v", sha, err)
+		}
+
+		blobRemote := blobRemotePath(sha, true)
+		exists, err := remoteFileExists(client, host, blobRemote)
+		if err != nil {
+			return err
+		}
+
+		for _, be := range entries {
+			u, _ := url.Parse(host)
+			u.Path, _ = url.JoinPath(u.Path, be.path)
+
+			var body io.Reader
+			if exists {
+				body = http.NoBody
+				u.RawQuery = "sha=" + sha
+			} else {
+				body = bytes.NewReader(gzData)
+			}
+
+			req, err := http.NewRequest(http.MethodPut, u.String(), body)
+			if err != nil {
+				return err
+			}
+			req.Header.Set("Content-Type", "application/gzip")
+			req.Header.Set("Content-Encoding", "gzip")
+
+			resp, err := client.Do(req)
+			if err != nil {
+				return fmt.Errorf("restore %s: %v", be.path, err)
+			}
+			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			resp.Body.Close()
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				return fmt.Errorf("restore %s: %s: %s", be.path, resp.Status, strings.TrimSpace(string(bodyBytes)))
+			}
+
+			exists = true
+		}
+	}
+
+	return nil
 }
 
 // NewServer returns the w9y HTTP handler.

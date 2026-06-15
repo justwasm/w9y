@@ -285,47 +285,139 @@ func TestClientUploadSendsBodyWhenBlobMissing(t *testing.T) {
 	}
 }
 
-func TestBackupAndRestorePreservesData(t *testing.T) {
+func TestBackupRemoteDownloadsEntriesAndBlobs(t *testing.T) {
 	dir := t.TempDir()
+	server := NewServer(dir)
+
 	body := []byte("wasm")
 	gz := mustGzip(t, body)
 	sha := sha256Hex(gz)
 
-	if err := os.MkdirAll(filepath.Join(dir, "blob"), 0o755); err != nil {
-		t.Fatal(err)
+	for _, path := range []string{"/foo.wasm", "/bar.wasm"} {
+		req := httptest.NewRequest(http.MethodPut, path, bytes.NewReader(gz))
+		rec := httptest.NewRecorder()
+		server.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("upload %s status = %d", path, rec.Code)
+		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, "blob", sha+".wasm.gz"), gz, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	m := &mapping{Entries: map[string]entry{"/foo.wasm": {SHA: sha, Time: 100}}}
-	if err := saveMapping(dir, m); err != nil {
+
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+
+	destDir := t.TempDir()
+	if err := backupRemote(http.DefaultClient, httpServer.URL, destDir); err != nil {
 		t.Fatal(err)
 	}
 
-	tarball := filepath.Join(t.TempDir(), "backup.tar")
-	if err := backupData(dir, tarball); err != nil {
+	m, err := loadMapping(destDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(m.Entries))
+	}
+
+	blob, err := os.ReadFile(filepath.Join(destDir, "blob", sha+".wasm.gz"))
+	if err != nil {
+		t.Fatalf("missing blob: %v", err)
+	}
+	if !bytes.Equal(blob, gz) {
+		t.Fatal("blob content mismatch")
+	}
+}
+
+func TestRestoreRemoteUploadsEntriesAndBlobs(t *testing.T) {
+	backupDir := t.TempDir()
+	body := []byte("wasm")
+	gz := mustGzip(t, body)
+	sha := sha256Hex(gz)
+
+	if err := os.MkdirAll(filepath.Join(backupDir, "blob"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(backupDir, "blob", sha+".wasm.gz"), gz, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := &mapping{Entries: map[string]entry{
+		"/foo.wasm": {SHA: sha, Time: 100},
+		"/bar.wasm": {SHA: sha, Time: 200},
+	}}
+	if err := saveMapping(backupDir, m); err != nil {
 		t.Fatal(err)
 	}
 
-	restoreDir := t.TempDir()
-	if err := restoreData(restoreDir, tarball); err != nil {
+	serverDir := t.TempDir()
+	server := NewServer(serverDir)
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+
+	if err := restoreRemote(http.DefaultClient, httpServer.URL, backupDir); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := os.ReadFile(filepath.Join(restoreDir, "blob", sha+".wasm.gz")); err != nil || !bytes.Equal(got, gz) {
-		t.Fatalf("restored blob = %v, %v", got, err)
+
+	for _, path := range []string{"/foo.wasm", "/bar.wasm"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		server.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("get %s status = %d", path, rec.Code)
+		}
+		if got := mustGunzip(t, rec.Body.Bytes()); !bytes.Equal(got, body) {
+			t.Fatalf("get %s body = %v, want %v", path, got, body)
+		}
 	}
-	restored, err := loadMapping(restoreDir)
+
+	entries, err := os.ReadDir(filepath.Join(serverDir, "blob"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 blob file, got %d", len(entries))
+	}
+}
+
+func TestBackupRestoreRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	server := NewServer(dir)
+
+	body := []byte("wasm")
+	gz := mustGzip(t, body)
+	sha := sha256Hex(gz)
+
+	req := httptest.NewRequest(http.MethodPut, "/foo.wasm", bytes.NewReader(gz))
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("upload status = %d", rec.Code)
+	}
+
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+
+	backupDir := t.TempDir()
+	if err := backupRemote(http.DefaultClient, httpServer.URL, backupDir); err != nil {
+		t.Fatal(err)
+	}
+
+	serverDir2 := t.TempDir()
+	server2 := NewServer(serverDir2)
+	httpServer2 := httptest.NewServer(server2)
+	defer httpServer2.Close()
+
+	if err := restoreRemote(http.DefaultClient, httpServer2.URL, backupDir); err != nil {
+		t.Fatal(err)
+	}
+
+	restored, err := loadMapping(serverDir2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if restored.Entries["/foo.wasm"].SHA != sha {
 		t.Fatalf("restored mapping = %+v", restored.Entries)
 	}
-}
-
-func TestSafeTarPathRejectsTraversal(t *testing.T) {
-	if _, err := safeTarPath(t.TempDir(), "../outside"); err == nil {
-		t.Fatal("safeTarPath accepted traversal")
+	if _, err := os.Stat(filepath.Join(serverDir2, "blob", sha+".wasm.gz")); err != nil {
+		t.Fatalf("missing blob: %v", err)
 	}
 }
 
