@@ -102,7 +102,7 @@ func handleGoWasm(w http.ResponseWriter, r *http.Request, builder *GoWasmBuilder
 		return
 	}
 	gzPath := blobPath(builder.DataDir(), sha, true)
-	serveGzipFile(w, r, gzPath)
+	serveFile(w, r, gzPath, true)
 }
 
 // isPseudoVersion reports whether s is an already-canonical Go module version

@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -200,7 +199,7 @@ func handleDownload(w http.ResponseWriter, r *http.Request, store BlobStore, dat
 	// blob path serves the gzip file as-is (raw bytes, no Content-Encoding)
 	if isBlobRemotePath(remotePath) {
 		gzPath := storagePath(dataDir, remotePath)
-		serveRawFile(w, r, gzPath)
+		serveFile(w, r, gzPath, false)
 		return
 	}
 
@@ -214,11 +213,11 @@ func handleDownload(w http.ResponseWriter, r *http.Request, store BlobStore, dat
 		return
 	}
 	gzPath := blobPath(dataDir, e.Hash, true)
-	serveGzipFile(w, r, gzPath)
+	serveFile(w, r, gzPath, true)
 }
 
-func serveRawFile(w http.ResponseWriter, r *http.Request, path string) {
-	file, err := os.Open(path)
+func serveFile(w http.ResponseWriter, r *http.Request, filePath string, mightBeGzip bool) {
+	f, err := os.Open(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			http.NotFound(w, r)
@@ -227,52 +226,31 @@ func serveRawFile(w http.ResponseWriter, r *http.Request, path string) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer file.Close()
+	defer f.Close()
 
-	stat, err := file.Stat()
+	stat, err := f.Stat()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set("Content-Type", contentType(path))
-	http.ServeContent(w, r, path, stat.ModTime(), file)
-}
-
-func serveGzipFile(w http.ResponseWriter, r *http.Request, gzPath string) {
-	file, err := os.Open(gzPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			http.NotFound(w, r)
+	virtualPath := filePath
+	if mightBeGzip {
+		virtualPath = strings.TrimSuffix(filePath, ".gz")
+		w.Header().Set("Vary", "Accept-Encoding")
+		var header [2]byte
+		if _, err := io.ReadFull(f, header[:]); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer file.Close()
-
-	stat, err := file.Stat()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		f.Seek(0, io.SeekStart)
+		if header[0] == 0x1f && header[1] == 0x8b {
+			w.Header().Set("Content-Encoding", "gzip")
+		}
 	}
 
-	// Peek at first two bytes to detect gzip magic (0x1f, 0x8b).
-	// Only set Content-Encoding: gzip when the file is actually gzip compressed.
-	var header [2]byte
-	if _, err := io.ReadFull(file, header[:]); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	file.Seek(0, io.SeekStart)
-
-	virtualPath := strings.TrimSuffix(gzPath, ".gz")
 	w.Header().Set("Content-Type", contentType(virtualPath))
-	w.Header().Set("Vary", "Accept-Encoding")
-	if header[0] == 0x1f && header[1] == 0x8b {
-		w.Header().Set("Content-Encoding", "gzip")
-	}
-	http.ServeContent(w, r, path.Base(virtualPath), stat.ModTime(), file)
+	http.ServeContent(w, r, filepath.Base(virtualPath), stat.ModTime(), f)
 }
 
 func newServerCommand() *cobra.Command {
@@ -284,7 +262,6 @@ func newServerCommand() *cobra.Command {
 		Use:   "server [-port port] [-check]",
 		Short: "Start the w9y HTTP server",
 		RunE: func(c *cobra.Command, args []string) error {
-			dataDir := getenv("DATA_DIR", defaultDataDir)
 			addr := ":" + port
 			slog.Info("starting server", "data_dir", dataDir, "addr", addr)
 

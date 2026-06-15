@@ -13,7 +13,6 @@ import (
 )
 
 func newRestoreCommand() *cobra.Command {
-	var dataDir string
 	cmd := &cobra.Command{
 		Use:   "restore [-data-dir data]",
 		Short: "Restore all entries and blobs to remote server",
@@ -23,7 +22,6 @@ func newRestoreCommand() *cobra.Command {
 			return restoreRemote(http.DefaultClient, defaultHost, dataDir)
 		},
 	}
-	cmd.Flags().StringVar(&dataDir, "data-dir", getenv("DATA_DIR", defaultDataDir), "data directory")
 	return cmd
 }
 

@@ -4,17 +4,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
 
 func newGCCommand() *cobra.Command {
-	var (
-		dataDir string
-		clean   bool
-	)
+	var clean bool
 	cmd := &cobra.Command{
 		Use:   "gc [-data-dir data] [-clean]",
 		Short: "Find and remove unreferenced blobs",
@@ -26,7 +21,6 @@ By default, only lists orphans (dry-run). Use -clean to delete them.`,
 			return gcData(dataDir, clean)
 		},
 	}
-	cmd.Flags().StringVar(&dataDir, "data-dir", getenv("DATA_DIR", defaultDataDir), "data directory")
 	cmd.Flags().BoolVar(&clean, "clean", false, "delete orphaned blobs instead of dry-run")
 	return cmd
 }
@@ -43,35 +37,22 @@ func gcData(dataDir string, clean bool) error {
 		referenced[e.Hash] = true
 	}
 
-	blobDir := filepath.Join(dataDir, "blob")
-	dirEntries, err := os.ReadDir(blobDir)
+	files, err := listBlobFiles(dataDir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return err
 	}
 
-	for _, de := range dirEntries {
-		if de.IsDir() {
+	for _, f := range files {
+		if referenced[f.SHA] {
 			continue
 		}
-		name := de.Name()
-		sha, ok := strings.CutSuffix(name, ".wasm.gz")
-		if !ok {
-			continue
-		}
-		if referenced[sha] {
-			continue
-		}
-		path := filepath.Join(blobDir, name)
 		if clean {
-			if err := os.Remove(path); err != nil {
-				return fmt.Errorf("remove %s: %v", name, err)
+			if err := os.Remove(f.Path); err != nil {
+				return fmt.Errorf("remove %s: %v", f.Name, err)
 			}
-			slog.Info("removed orphan blob", "name", name)
+			slog.Info("removed orphan blob", "name", f.Name)
 		} else {
-			slog.Info("orphan blob", "name", name)
+			slog.Info("orphan blob", "name", f.Name)
 		}
 	}
 

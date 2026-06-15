@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -17,7 +16,6 @@ import (
 var wasmMagic = []byte{0x00, 0x61, 0x73, 0x6d} // \0asm
 
 func newCheckCommand() *cobra.Command {
-	var dataDir string
 	cmd := &cobra.Command{
 		Use:   "check [-data-dir data]",
 		Short: "Verify blob integrity",
@@ -27,39 +25,27 @@ func newCheckCommand() *cobra.Command {
 			return checkData(dataDir)
 		},
 	}
-	cmd.Flags().StringVar(&dataDir, "data-dir", getenv("DATA_DIR", defaultDataDir), "data directory")
 	return cmd
 }
 
 func checkData(dataDir string) error {
-	blobDir := filepath.Join(dataDir, "blob")
-	entries, err := os.ReadDir(blobDir)
+	files, err := listBlobFiles(dataDir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			slog.Warn("blob directory does not exist", "path", blobDir)
-			return nil
-		}
 		return err
+	}
+	if len(files) == 0 {
+		slog.Warn("blob directory does not exist or is empty", "path", filepath.Join(dataDir, "blob"))
+		return nil
 	}
 
 	var total, passed, failed int
-	for _, de := range entries {
-		if de.IsDir() {
-			continue
-		}
-		name := de.Name()
-		sha, ok := strings.CutSuffix(name, ".wasm.gz")
-		if !ok {
-			continue
-		}
+	for _, f := range files {
 		total++
-		path := filepath.Join(blobDir, name)
-
-		if err := verifyBlob(path, sha); err != nil {
-			slog.Error("blob check failed", "name", name, "error", err)
+		if err := verifyBlob(f.Path, f.SHA); err != nil {
+			slog.Error("blob check failed", "name", f.Name, "error", err)
 			failed++
 		} else {
-			slog.Info("blob check passed", "name", name)
+			slog.Info("blob check passed", "name", f.Name)
 			passed++
 		}
 	}

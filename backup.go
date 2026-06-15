@@ -15,7 +15,6 @@ import (
 )
 
 func newBackupCommand() *cobra.Command {
-	var dataDir string
 	cmd := &cobra.Command{
 		Use:   "backup [-data-dir data]",
 		Short: "Backup all entries and blobs from remote server",
@@ -25,7 +24,6 @@ func newBackupCommand() *cobra.Command {
 			return backupRemote(http.DefaultClient, defaultHost, dataDir)
 		},
 	}
-	cmd.Flags().StringVar(&dataDir, "data-dir", getenv("DATA_DIR", defaultDataDir), "data directory")
 	return cmd
 }
 

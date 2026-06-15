@@ -27,6 +27,8 @@ const defaultDataDir = "data"
 
 var defaultHost = cmp.Or(os.Getenv("W9Y"), "https://w9y.up.railway.app/")
 
+var dataDir string
+
 var ErrPathNotFound = errors.New("path not found")
 
 type Blob struct {
@@ -85,11 +87,7 @@ type fileBlobStore struct {
 func (s *fileBlobStore) Get(path string) (Blob, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	entries, err := s.load()
-	if err != nil {
-		return Blob{}, err
-	}
-	b, ok := entries[path]
+	b, ok := s.cache[path]
 	if !ok {
 		return Blob{}, ErrPathNotFound
 	}
@@ -99,36 +97,24 @@ func (s *fileBlobStore) Get(path string) (Blob, error) {
 func (s *fileBlobStore) Set(path, hash string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	entries, err := s.load()
-	if err != nil {
-		return err
-	}
-	entries[path] = Blob{Hash: hash, Time: time.Now().UnixMilli()}
-	return s.save(entries)
+	s.cache[path] = Blob{Hash: hash, Time: time.Now().UnixMilli()}
+	return s.save(s.cache)
 }
 
 func (s *fileBlobStore) SetWithTime(path, hash string, time int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	entries, err := s.load()
-	if err != nil {
-		return err
-	}
-	entries[path] = Blob{Hash: hash, Time: time}
-	return s.save(entries)
+	s.cache[path] = Blob{Hash: hash, Time: time}
+	return s.save(s.cache)
 }
 
 func (s *fileBlobStore) SetBatch(entries map[string]Blob) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	existing, err := s.load()
-	if err != nil {
-		return err
-	}
 	for k, v := range entries {
-		existing[k] = v
+		s.cache[k] = v
 	}
-	return s.save(existing)
+	return s.save(s.cache)
 }
 
 func (s *fileBlobStore) DataDir() string { return s.dataDir }
@@ -136,18 +122,6 @@ func (s *fileBlobStore) DataDir() string { return s.dataDir }
 func (s *fileBlobStore) List() (map[string]Blob, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	entries, err := s.load()
-	if err != nil {
-		return nil, err
-	}
-	result := make(map[string]Blob, len(entries))
-	for k, v := range entries {
-		result[k] = v
-	}
-	return result, nil
-}
-
-func (s *fileBlobStore) load() (map[string]Blob, error) {
 	result := make(map[string]Blob, len(s.cache))
 	for k, v := range s.cache {
 		result[k] = v
@@ -182,6 +156,8 @@ func NewRootCommand() *cobra.Command {
 		Long: `w9y is a WebAssembly blob hosting service with content-addressed storage,
 automatic gzip serving, and on-demand Go WASM builds.`,
 	}
+
+	root.PersistentFlags().StringVar(&dataDir, "data-dir", getenv("DATA_DIR", defaultDataDir), "data directory")
 
 	root.AddCommand(newServerCommand())
 	root.AddCommand(newUploadCommand())
@@ -352,4 +328,40 @@ func newNoCompressionClient(client *http.Client) *http.Client {
 		return &http.Client{Transport: clone}
 	}
 	return client
+}
+
+// blobFile represents a single .wasm.gz file in the blob directory.
+type blobFile struct {
+	Name string // filename (e.g. "abc123.wasm.gz")
+	SHA  string // SHA256 hex without extension
+	Path string // full filesystem path
+}
+
+// listBlobFiles returns all .wasm.gz files in dataDir/blob.
+func listBlobFiles(dataDir string) ([]blobFile, error) {
+	blobDir := filepath.Join(dataDir, "blob")
+	entries, err := os.ReadDir(blobDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var files []blobFile
+	for _, de := range entries {
+		if de.IsDir() {
+			continue
+		}
+		name := de.Name()
+		sha, ok := strings.CutSuffix(name, ".wasm.gz")
+		if !ok {
+			continue
+		}
+		files = append(files, blobFile{
+			Name: name,
+			SHA:  sha,
+			Path: filepath.Join(blobDir, name),
+		})
+	}
+	return files, nil
 }
