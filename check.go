@@ -96,8 +96,9 @@ func verifyBlob(path, wantSHA string) error {
 		}
 	}
 
-	// Stream the rest through SHA256
+	// Stream the full content (including magic bytes) through SHA256
 	h := sha256.New()
+	h.Write(magic)
 	if _, err := io.Copy(h, gr); err != nil {
 		return fmt.Errorf("hash: %w", err)
 	}
