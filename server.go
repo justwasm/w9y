@@ -179,7 +179,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request, dataDir, remotePath st
 	w.WriteHeader(http.StatusCreated)
 	verb := "uploaded"
 	if linked {
-		verb = "updated"
+		verb = "linked"
 	}
 	fmt.Fprintf(w, "%s %s -> blob/%s.wasm.gz", verb, remotePath, sha)
 }
