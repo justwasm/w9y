@@ -83,7 +83,9 @@ func handleUpload(w http.ResponseWriter, r *http.Request, dataDir, remotePath st
 	}
 
 	var sha string
+	linked := false
 	if s := r.URL.Query().Get("sha"); s != "" {
+		linked = true
 		sha = s
 		gzPath := blobPath(dataDir, sha, true)
 		if _, err := os.Stat(gzPath); err != nil {
@@ -125,7 +127,11 @@ func handleUpload(w http.ResponseWriter, r *http.Request, dataDir, remotePath st
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusCreated)
-	fmt.Fprintf(w, "uploaded %s -> blob/%s.wasm.gz", remotePath, sha)
+	verb := "uploaded"
+	if linked {
+		verb = "updated"
+	}
+	fmt.Fprintf(w, "%s %s -> blob/%s.wasm.gz", verb, remotePath, sha)
 }
 
 func handleDownload(w http.ResponseWriter, r *http.Request, dataDir, remotePath string) {
