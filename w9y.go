@@ -44,7 +44,7 @@ func Run(args []string) error {
 
 func usage() error {
 	fmt.Fprintln(os.Stderr, `usage:
-  w9y upload [--as /name.wasm] file.wasm
+  w9y upload [--to /name.wasm] file.wasm
 
 env:
   PORT      start server mode on this port when present
@@ -54,8 +54,12 @@ env:
 }
 
 func upload(args []string) error {
+	return uploadWithClient(args, http.DefaultClient)
+}
+
+func uploadWithClient(args []string, client *http.Client) error {
 	fs := flag.NewFlagSet("upload", flag.ContinueOnError)
-	as := fs.String("as", "", "remote path to upload as")
+	to := fs.String("to", "", "remote path to upload to")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -64,7 +68,7 @@ func upload(args []string) error {
 	}
 
 	fileName := fs.Arg(0)
-	remotePath := *as
+	remotePath := *to
 	if remotePath == "" {
 		remotePath = "/" + filepath.Base(fileName)
 	}
@@ -94,7 +98,7 @@ func upload(args []string) error {
 	}
 	req.Header.Set("Content-Type", contentType(remotePath))
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
