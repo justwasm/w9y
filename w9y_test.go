@@ -205,10 +205,10 @@ func TestRootListsEntriesSortedByTime(t *testing.T) {
 	}
 
 	store := NewBlobStore(dir)
-	if err := store.Set("/a.wasm", Blob{Hash: "a", Time: 100}); err != nil {
+	if err := store.SetWithTime("/a.wasm", "a", 100); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Set("/b.wasm", Blob{Hash: "b", Time: 200}); err != nil {
+	if err := store.SetWithTime("/b.wasm", "b", 200); err != nil {
 		t.Fatal(err)
 	}
 
@@ -387,10 +387,10 @@ func TestRestoreRemoteUploadsEntriesAndBlobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := NewBlobStore(backupDir)
-	if err := store.Set("/foo.wasm", Blob{Hash: sha, Time: 100}); err != nil {
+	if err := store.SetWithTime("/foo.wasm", sha, 100); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Set("/bar.wasm", Blob{Hash: sha, Time: 200}); err != nil {
+	if err := store.SetWithTime("/bar.wasm", sha, 200); err != nil {
 		t.Fatal(err)
 	}
 
@@ -522,7 +522,7 @@ func TestGCLeavesReferencedBlobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := NewBlobStore(dir)
-	if err := store.Set("/foo.wasm", Blob{Hash: sha, Time: 100}); err != nil {
+	if err := store.SetWithTime("/foo.wasm", sha, 100); err != nil {
 		t.Fatal(err)
 	}
 

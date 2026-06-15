@@ -344,7 +344,7 @@ func doBuildGoWasm(store BlobStore, reqCtx context.Context, dataDir, importPath,
 	}
 
 	// Update mapping
-	if err := store.Set(remotePath, Blob{Hash: sha, Time: time.Now().UnixMilli()}); err != nil {
+	if err := store.Set(remotePath, sha); err != nil {
 		return "", err
 	}
 

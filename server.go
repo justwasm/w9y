@@ -203,7 +203,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request, store BlobStore, dataD
 		}
 	}
 
-	if err := store.Set(remotePath, Blob{Hash: sha, Time: time.Now().UnixMilli()}); err != nil {
+	if err := store.Set(remotePath, sha); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

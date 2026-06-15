@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -30,14 +31,14 @@ var ErrPathNotFound = errors.New("path not found")
 
 type Blob struct {
 	Hash string `yaml:"hash" json:"hash"`
-	Size int64  `yaml:"size" json:"size"`
 	Time int64  `yaml:"time" json:"time"`
 }
 
 // BlobStore provides concurrent-safe access to the path→blob mapping.
 type BlobStore interface {
 	Get(path string) (Blob, error)
-	Set(path string, blob Blob) error
+	Set(path, hash string) error
+	SetWithTime(path, hash string, time int64) error
 	List() (map[string]Blob, error)
 }
 
@@ -65,14 +66,25 @@ func (s *fileBlobStore) Get(path string) (Blob, error) {
 	return b, nil
 }
 
-func (s *fileBlobStore) Set(path string, blob Blob) error {
+func (s *fileBlobStore) Set(path, hash string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entries, err := s.load()
 	if err != nil {
 		return err
 	}
-	entries[path] = blob
+	entries[path] = Blob{Hash: hash, Time: time.Now().UnixMilli()}
+	return s.save(entries)
+}
+
+func (s *fileBlobStore) SetWithTime(path, hash string, time int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := s.load()
+	if err != nil {
+		return err
+	}
+	entries[path] = Blob{Hash: hash, Time: time}
 	return s.save(entries)
 }
 

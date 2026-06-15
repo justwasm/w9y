@@ -152,7 +152,7 @@ func backupRemote(client *http.Client, host, destDir string) error {
 	// Write mapping only after all blobs are successfully downloaded
 	store := NewBlobStore(destDir)
 	for _, p := range parsed {
-		if err := store.Set(p.path, Blob{Hash: p.hash, Time: p.time}); err != nil {
+		if err := store.SetWithTime(p.path, p.hash, p.time); err != nil {
 			return err
 		}
 	}
