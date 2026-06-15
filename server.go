@@ -207,10 +207,10 @@ func handleUpload(w http.ResponseWriter, r *http.Request, dataDir, remotePath st
 }
 
 func handleDownload(w http.ResponseWriter, r *http.Request, dataDir, remotePath string) {
-	// blob path serves the gzip file directly
+	// blob path serves the gzip file as-is (raw bytes, no Content-Encoding)
 	if isBlobRemotePath(remotePath) {
 		gzPath := storagePath(dataDir, remotePath)
-		serveGzipFile(w, r, gzPath)
+		serveRawFile(w, r, gzPath)
 		return
 	}
 
@@ -226,6 +226,28 @@ func handleDownload(w http.ResponseWriter, r *http.Request, dataDir, remotePath 
 	}
 	gzPath := blobPath(dataDir, e.SHA, true)
 	serveGzipFile(w, r, gzPath)
+}
+
+func serveRawFile(w http.ResponseWriter, r *http.Request, path string) {
+	file, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
+
+	stat, err := file.Stat()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", contentType(path))
+	http.ServeContent(w, r, path, stat.ModTime(), file)
 }
 
 func serveGzipFile(w http.ResponseWriter, r *http.Request, gzPath string) {
