@@ -634,6 +634,42 @@ func TestGoWasmPathReturns404ForBadPath(t *testing.T) {
 	}
 }
 
+func TestVerifyBlob(t *testing.T) {
+	dir := t.TempDir()
+	body := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00} // valid wasm
+	gz := mustGzip(t, body)
+	sha := sha256Hex(body)
+
+	blobDir := filepath.Join(dir, "blob")
+	if err := os.MkdirAll(blobDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gzPath := filepath.Join(blobDir, sha+".wasm.gz")
+	if err := os.WriteFile(gzPath, gz, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Valid blob should pass
+	if err := verifyBlob(gzPath, sha); err != nil {
+		t.Fatalf("verifyBlob: %v", err)
+	}
+
+	// Wrong hash should fail
+	if err := verifyBlob(gzPath, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); err == nil {
+		t.Fatal("expected error for wrong hash")
+	}
+
+	// Corrupted content should fail
+	corrupt := []byte("not gzip at all")
+	corruptPath := filepath.Join(blobDir, "corrupt.wasm.gz")
+	if err := os.WriteFile(corruptPath, corrupt, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyBlob(corruptPath, sha); err == nil {
+		t.Fatal("expected error for corrupt content")
+	}
+}
+
 func mustGzip(t *testing.T, body []byte) []byte {
 	t.Helper()
 	gz, err := gzipBytes(body)
