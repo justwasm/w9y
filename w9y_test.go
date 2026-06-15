@@ -223,7 +223,8 @@ func TestRootListsEntriesSortedByTime(t *testing.T) {
 
 func TestClientUploadWithPrecheck(t *testing.T) {
 	body := []byte("wasm")
-	sha := sha256Hex(body)
+	gz := mustGzip(t, body)
+	sha := sha256Hex(gz)
 
 	var requests []struct{ method, path, query string }
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -264,7 +265,7 @@ func TestClientUploadWithPrecheck(t *testing.T) {
 func TestClientUploadSendsBodyWhenBlobMissing(t *testing.T) {
 	body := []byte("wasm")
 	gz := mustGzip(t, body)
-	sha := sha256Hex(body)
+	sha := sha256Hex(gz)
 
 	var requests []struct{ method, path string }
 	var uploaded []byte
