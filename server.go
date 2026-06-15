@@ -1,9 +1,6 @@
 package w9y
 
 import (
-	"compress/gzip"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -108,87 +105,78 @@ func handleUpload(w http.ResponseWriter, r *http.Request, store BlobStore, dataD
 		return
 	}
 
-	var sha string
-	linked := false
-	if s := r.URL.Query().Get("hash"); s != "" {
-		sha = s
-		gzPath := blobPath(dataDir, sha, true)
-		if _, err := os.Stat(gzPath); os.IsNotExist(err) {
-			// Blob not yet stored — stream body to temp file, then rename
-			if err := os.MkdirAll(filepath.Dir(gzPath), 0o755); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			tmpName, written, tmpErr := streamToTemp(filepath.Dir(gzPath), "*.wasm.gz", r.Body)
-			if tmpErr != nil {
-				http.Error(w, tmpErr.Error(), http.StatusBadRequest)
-				return
-			}
-			if written == 0 {
-				os.Remove(tmpName)
-				http.Error(w, "blob not found", http.StatusNotFound)
-				return
-			}
-			if err := os.Rename(tmpName, gzPath); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			// Verify SHA256 of decompressed content matches the provided hash
-			if err := verifyGzipHash(gzPath, sha); err != nil {
-				os.Remove(gzPath)
+	claimed := r.URL.Query().Get("hash")
+
+	// Fast path: hash provided and blob already exists — verify and link
+	if claimed != "" {
+		gzPath := blobPath(dataDir, claimed, true)
+		if _, err := os.Stat(gzPath); err == nil {
+			if err := verifyGzipHash(gzPath, claimed); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-		} else if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeUploadResponse(w, store, remotePath, claimed, true)
 			return
-		} else {
-			// Verify existing blob's hash matches the claimed hash
-			if err := verifyGzipHash(gzPath, sha); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			linked = true
-		}
-	} else {
-		tmpName, written, tmpErr := streamToTemp(dataDir, "*.wasm.gz", r.Body)
-		if tmpErr != nil {
-			http.Error(w, tmpErr.Error(), http.StatusBadRequest)
-			return
-		}
-		if written == 0 {
-			os.Remove(tmpName)
-			http.Error(w, "blob not found", http.StatusNotFound)
-			return
-		}
-		// Hash the decompressed (raw wasm) content for consistent content addressing
-		f, openErr := os.Open(tmpName)
-		if openErr != nil {
-			http.Error(w, openErr.Error(), http.StatusInternalServerError)
-			return
-		}
-		gr, gzErr := gzip.NewReader(f)
-		if gzErr != nil {
-			f.Close()
-			http.Error(w, gzErr.Error(), http.StatusBadRequest)
-			return
-		}
-		h := sha256.New()
-		io.Copy(h, gr)
-		gr.Close()
-		f.Close()
-		sha = hex.EncodeToString(h.Sum(nil))
-		gzPath := blobPath(dataDir, sha, true)
-		if err := os.MkdirAll(filepath.Dir(gzPath), 0o755); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if err := os.Rename(tmpName, gzPath); err != nil {
+		} else if !os.IsNotExist(err) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
 
+	// Stream body to temp file in the blob directory
+	gzDir := filepath.Dir(blobPath(dataDir, "x", true))
+	if err := os.MkdirAll(gzDir, 0o755); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	tmpName, written, tmpErr := streamToTemp(gzDir, "*.wasm.gz", r.Body)
+	if tmpErr != nil {
+		http.Error(w, tmpErr.Error(), http.StatusBadRequest)
+		return
+	}
+	if written == 0 {
+		os.Remove(tmpName)
+		http.Error(w, "blob not found", http.StatusNotFound)
+		return
+	}
+
+	// Compute SHA-256 of the decompressed content
+	sha, err := gzipSHA256(tmpName)
+	if err != nil {
+		os.Remove(tmpName)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// If hash was claimed, verify it matches
+	if claimed != "" && claimed != sha {
+		os.Remove(tmpName)
+		http.Error(w, fmt.Sprintf("hash mismatch: got %s, want %s", sha, claimed), http.StatusBadRequest)
+		return
+	}
+
+	gzPath := blobPath(dataDir, sha, true)
+
+	// If target already exists, just clean up the temp file
+	linked := false
+	if _, err := os.Stat(gzPath); err == nil {
+		os.Remove(tmpName)
+	} else if os.IsNotExist(err) {
+		if err := os.Rename(tmpName, gzPath); err != nil {
+			os.Remove(tmpName)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		os.Remove(tmpName)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeUploadResponse(w, store, remotePath, sha, linked)
+}
+
+func writeUploadResponse(w http.ResponseWriter, store BlobStore, remotePath, sha string, linked bool) {
 	if err := store.Set(remotePath, sha); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

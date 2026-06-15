@@ -14,7 +14,7 @@ import (
 
 func restore(args []string) error {
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
-	dataDir := fs.String("data-dir", getenv("DATA_DIR", "data"), "data directory")
+	dataDir := fs.String("data-dir", getenv("DATA_DIR", defaultDataDir), "data directory")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), `usage: w9y restore [-data-dir data]
 
@@ -54,22 +54,25 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 	var uploaded, linked int
 	for sha, entries := range shaToEntries {
 		gzPath := blobPath(backupDir, sha, true)
-		f, err := os.Open(gzPath)
-		if err != nil {
-			return fmt.Errorf("missing blob %s in backup: %v", sha, err)
-		}
-
-		fi, err := f.Stat()
-		if err != nil {
-			f.Close()
-			return fmt.Errorf("stat blob %s: %v", sha, err)
-		}
-
 		blobRemote := blobRemotePath(sha, true)
 		exists, err := remoteFileExists(client, host, blobRemote)
 		if err != nil {
-			f.Close()
 			return err
+		}
+
+		// Only open the file when we actually need to upload it
+		var f *os.File
+		var fi os.FileInfo
+		if !exists {
+			f, err = os.Open(gzPath)
+			if err != nil {
+				return fmt.Errorf("missing blob %s in backup: %v", sha, err)
+			}
+			fi, err = f.Stat()
+			if err != nil {
+				f.Close()
+				return fmt.Errorf("stat blob %s: %v", sha, err)
+			}
 		}
 
 		for _, be := range entries {
@@ -90,7 +93,9 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 
 			req, err := http.NewRequest(http.MethodPut, u.String(), body)
 			if err != nil {
-				f.Close()
+				if f != nil {
+					f.Close()
+				}
 				return fmt.Errorf("restore %s: %v", be.path, err)
 			}
 			if !exists {
@@ -101,13 +106,17 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 
 			resp, err := client.Do(req)
 			if err != nil {
-				f.Close()
+				if f != nil {
+					f.Close()
+				}
 				return fmt.Errorf("restore %s: %v", be.path, err)
 			}
 			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 			resp.Body.Close()
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-				f.Close()
+				if f != nil {
+					f.Close()
+				}
 				return fmt.Errorf("restore %s: %s: %s", be.path, resp.Status, strings.TrimSpace(string(bodyBytes)))
 			}
 
@@ -123,7 +132,9 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 			}
 			exists = true
 		}
-		f.Close()
+		if f != nil {
+			f.Close()
+		}
 	}
 
 	slog.Info("restore complete", "uploaded", uploaded, "linked", linked)

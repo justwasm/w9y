@@ -16,7 +16,7 @@ import (
 
 func backup(args []string) error {
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
-	dataDir := fs.String("data-dir", getenv("DATA_DIR", "data"), "data directory")
+	dataDir := fs.String("data-dir", getenv("DATA_DIR", defaultDataDir), "data directory")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), `usage: w9y backup [-data-dir data]
 
@@ -140,12 +140,13 @@ func backupRemote(client *http.Client, host, destDir string) error {
 		slog.Info("backup complete", "downloaded", downloaded, "skipped", skipped)
 	}
 
-	// Write mapping only after all blobs are successfully downloaded
-	store := NewBlobStore(destDir)
+	// Write mapping in a single batch — avoids O(N) YAML round-trips
+	entries := make(map[string]Blob, len(parsed))
 	for _, p := range parsed {
-		if err := store.SetWithTime(p.path, p.hash, p.time); err != nil {
-			return err
-		}
+		entries[p.path] = Blob{Hash: p.hash, Time: p.time}
+	}
+	if err := NewBlobStore(destDir).SetBatch(entries); err != nil {
+		return err
 	}
 
 	return nil

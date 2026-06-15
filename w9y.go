@@ -40,6 +40,7 @@ type BlobStore interface {
 	Get(path string) (Blob, error)
 	Set(path, hash string) error
 	SetWithTime(path, hash string, time int64) error
+	SetBatch(entries map[string]Blob) error
 	List() (map[string]Blob, error)
 }
 
@@ -87,6 +88,19 @@ func (s *fileBlobStore) SetWithTime(path, hash string, time int64) error {
 	}
 	entries[path] = Blob{Hash: hash, Time: time}
 	return s.save(entries)
+}
+
+func (s *fileBlobStore) SetBatch(entries map[string]Blob) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, err := s.load()
+	if err != nil {
+		return err
+	}
+	for k, v := range entries {
+		existing[k] = v
+	}
+	return s.save(existing)
 }
 
 func (s *fileBlobStore) List() (map[string]Blob, error) {
