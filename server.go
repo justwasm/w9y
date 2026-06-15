@@ -136,6 +136,12 @@ func handleUpload(w http.ResponseWriter, r *http.Request, store BlobStore, dataD
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+			// Verify SHA256 of decompressed content matches the provided hash
+			if err := verifyGzipHash(gzPath, sha); err != nil {
+				os.Remove(gzPath)
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 		} else if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -279,4 +285,31 @@ func serveGzipFile(w http.ResponseWriter, r *http.Request, gzPath string) {
 		w.Header().Set("Content-Encoding", "gzip")
 	}
 	http.ServeContent(w, r, path.Base(virtualPath)+".gz", stat.ModTime(), file)
+}
+
+// verifyGzipHash opens the gzip file at path, decompresses it, and checks
+// whether the SHA256 of the decompressed content matches wantSHA.
+func verifyGzipHash(gzPath, wantSHA string) error {
+	f, err := os.Open(gzPath)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer f.Close()
+
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("decompress: %w", err)
+	}
+	defer gr.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, gr); err != nil {
+		return fmt.Errorf("hash: %w", err)
+	}
+
+	gotSHA := hex.EncodeToString(h.Sum(nil))
+	if gotSHA != wantSHA {
+		return fmt.Errorf("hash mismatch: got %s, want %s", gotSHA, wantSHA)
+	}
+	return nil
 }

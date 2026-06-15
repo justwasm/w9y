@@ -354,7 +354,7 @@ func TestRestoreRemoteUploadsEntriesAndBlobs(t *testing.T) {
 	backupDir := t.TempDir()
 	body := []byte("wasm")
 	gz := mustGzip(t, body)
-	sha := sha256Hex(gz)
+	sha := sha256Hex(body)
 
 	if err := os.MkdirAll(filepath.Join(backupDir, "blob"), 0o755); err != nil {
 		t.Fatal(err)
