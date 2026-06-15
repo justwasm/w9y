@@ -2,6 +2,8 @@ package w9y
 
 import (
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
@@ -83,21 +85,24 @@ func verifyBlob(path, wantSHA string) error {
 	}
 	defer gr.Close()
 
-	decompressed, err := io.ReadAll(gr)
-	if err != nil {
-		return fmt.Errorf("decompress: %w", err)
-	}
-
-	if len(decompressed) < len(wasmMagic) {
-		return fmt.Errorf("too short (%d bytes), not a WASM binary", len(decompressed))
+	// Check magic bytes — read just the first 4 bytes
+	magic := make([]byte, len(wasmMagic))
+	if _, err := io.ReadFull(gr, magic); err != nil {
+		return fmt.Errorf("read magic: %w", err)
 	}
 	for i, b := range wasmMagic {
-		if decompressed[i] != b {
-			return fmt.Errorf("bad magic: got %02x, want %02x (not a WASM binary)", decompressed[:len(wasmMagic)], wasmMagic)
+		if magic[i] != b {
+			return fmt.Errorf("bad magic: got %02x, want %02x (not a WASM binary)", magic, wasmMagic)
 		}
 	}
 
-	gotSHA := sha256Hex(decompressed)
+	// Stream the rest through SHA256
+	h := sha256.New()
+	if _, err := io.Copy(h, gr); err != nil {
+		return fmt.Errorf("hash: %w", err)
+	}
+
+	gotSHA := hex.EncodeToString(h.Sum(nil))
 	if gotSHA != wantSHA {
 		return fmt.Errorf("sha256 mismatch: got %s, want %s", gotSHA, wantSHA)
 	}
