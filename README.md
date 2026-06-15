@@ -37,18 +37,23 @@ data/
 
 ```yaml
 # mapping.yaml
-/foo.wasm: abc123...
-/pkg/bar.wasm: def456...
+entries:
+  /foo.wasm:
+    sha: abc123...
+    time: 1718000000000
+  /pkg/bar.wasm:
+    sha: def456...
+    time: 1718000001000
 ```
 
 Uploads to `/blob` or `/blob/**` are rejected. The `/blob` namespace is reserved for content-addressed storage.
 
 ## Upload
 
-Set `HOST` to the remote w9y endpoint, then upload a file:
+Set `W9Y` to the remote w9y endpoint, then upload a file:
 
 ```sh
-HOST=http://localhost:8080 w9y upload foo.wasm
+W9Y=http://localhost:8080 w9y upload foo.wasm
 ```
 
 That uploads to `/foo.wasm`.
@@ -56,12 +61,12 @@ That uploads to `/foo.wasm`.
 Use `--to` to choose a different remote path:
 
 ```sh
-HOST=http://localhost:8080 w9y upload --to /bar.wasm foo.wasm
+W9Y=http://localhost:8080 w9y upload --to /bar.wasm foo.wasm
 ```
 
 `--to /bar.wasm` must come before the filepath. w9y uses Go's standard flag parser, which stops parsing flags after the first positional argument.
 
-The client hashes the original wasm and checks `HEAD /blob/<sha256>.wasm.gz` first. If the blob already exists on the server, it sends a link-only PUT with the `?sha=` query parameter and no body. Otherwise it sends the gzipped wasm as the body.
+The client hashes the original wasm and checks `HEAD /blob/<sha256>.wasm.gz` first. If the blob already exists on the server, it sends a link-only PUT with the `?sha256=` query parameter and no body. Otherwise it sends the gzipped wasm as the body.
 
 ## Serving
 
@@ -81,33 +86,47 @@ Access-Control-Allow-Origin: *
 
 ## Backup
 
-Create a tarball from the data directory:
+Download all blobs and mapping from the remote server to a local directory:
 
 ```sh
-w9y backup backup.tar
+w9y backup
 ```
 
-Use a custom data directory:
+By default, files are saved to `./data`. Use `-data-dir` to change the destination:
 
 ```sh
-w9y backup --data-dir /var/lib/w9y backup.tar
+w9y backup -data-dir /tmp/mybackup
 ```
 
-The backup preserves all blobs and the mapping file.
+Or pass the directory as a positional argument:
+
+```sh
+w9y backup /tmp/mybackup
+```
+
+The backup preserves all blobs and the mapping file. Progress is shown on stderr.
 
 ## Restore
 
-Restore a tarball into the data directory:
+Upload all blobs and mapping from a local backup to the remote server:
 
 ```sh
-w9y restore backup.tar
+w9y restore
 ```
 
-Use a custom data directory:
+By default, reads from `./data`. Use `-data-dir` to change the source:
 
 ```sh
-w9y restore --data-dir /var/lib/w9y backup.tar
+w9y restore -data-dir /tmp/mybackup
 ```
+
+Or pass the directory as a positional argument:
+
+```sh
+w9y restore /tmp/mybackup
+```
+
+Progress is shown on stderr.
 
 ## Docker
 

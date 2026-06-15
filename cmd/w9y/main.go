@@ -1,7 +1,7 @@
 package main
 
 import (
-	"log"
+	"log/slog"
 	"os"
 
 	"github.com/btwiuse/w9y"
@@ -9,6 +9,7 @@ import (
 
 func main() {
 	if err := w9y.Run(os.Args[1:]); err != nil {
-		log.Fatal(err)
+		slog.Error(err.Error())
+		os.Exit(1)
 	}
 }

@@ -1,6 +1,7 @@
 package w9y
 
 import (
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -30,7 +31,7 @@ func NewServer(dataDir string) http.Handler {
 		}
 
 		if remotePath == "/" {
-			handleList(w, r, dataDir)
+			handleList(w, dataDir)
 			return
 		}
 
@@ -54,7 +55,7 @@ func withCORS(next http.Handler) http.Handler {
 	})
 }
 
-func handleList(w http.ResponseWriter, r *http.Request, dataDir string) {
+func handleList(w http.ResponseWriter, dataDir string) {
 	m, err := loadMapping(dataDir)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -141,8 +142,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request, dataDir, remotePath st
 		}
 		tmpName := tmp.Name()
 		defer os.Remove(tmpName)
-		h := sha256.New()
-		written, copyErr := io.Copy(io.MultiWriter(tmp, h), r.Body)
+		written, copyErr := io.Copy(tmp, r.Body)
 		tmp.Close()
 		if copyErr != nil {
 			http.Error(w, copyErr.Error(), http.StatusBadRequest)
@@ -152,6 +152,22 @@ func handleUpload(w http.ResponseWriter, r *http.Request, dataDir, remotePath st
 			http.Error(w, "blob not found", http.StatusNotFound)
 			return
 		}
+		// Hash the decompressed (raw wasm) content for consistent content addressing
+		f, openErr := os.Open(tmpName)
+		if openErr != nil {
+			http.Error(w, openErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		gr, gzErr := gzip.NewReader(f)
+		if gzErr != nil {
+			f.Close()
+			http.Error(w, gzErr.Error(), http.StatusBadRequest)
+			return
+		}
+		h := sha256.New()
+		io.Copy(h, gr)
+		gr.Close()
+		f.Close()
 		sha = hex.EncodeToString(h.Sum(nil))
 		gzPath := blobPath(dataDir, sha, true)
 		if err := os.MkdirAll(filepath.Dir(gzPath), 0o755); err != nil {

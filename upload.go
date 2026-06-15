@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -20,6 +21,14 @@ func upload(args []string) error {
 func uploadWithClient(args []string, client *http.Client) error {
 	fs := flag.NewFlagSet("upload", flag.ContinueOnError)
 	to := fs.String("to", "", "remote path to upload to")
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), `usage: w9y upload [--to /name.wasm] file.wasm
+
+Upload a .wasm file to the remote server.
+
+flags:
+  --to  remote path (default /<filename>)`)
+	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -58,7 +67,7 @@ func uploadWithClient(args []string, client *http.Client) error {
 		}
 		beforeMB := float64(len(wasm)) / (1024 * 1024)
 		afterMB := float64(len(gz)) / (1024 * 1024)
-		fmt.Fprintf(os.Stderr, "compressing %s, %.2f MB -> %.2f MB\n", fileName, beforeMB, afterMB)
+		slog.Info("compressing file", "name", fileName, "before_mb", beforeMB, "after_mb", afterMB)
 		body = bytes.NewReader(gz)
 	}
 

@@ -9,7 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -39,7 +39,7 @@ func Run(args []string) error {
 	if port := os.Getenv("PORT"); port != "" {
 		dataDir := getenv("DATA_DIR", defaultDataDir)
 		addr := ":" + port
-		log.Printf("w9y serving %s on %s", dataDir, addr)
+		slog.Info("starting server", "data_dir", dataDir, "addr", addr)
 		return http.ListenAndServe(addr, NewServer(dataDir))
 	}
 
@@ -71,13 +71,13 @@ func Run(args []string) error {
 func usage() error {
 	fmt.Fprintln(os.Stderr, `usage:
   w9y upload [--to /name.wasm] file.wasm
-  w9y backup [dest-dir]
-  w9y restore <backup-dir>
-  w9y gc [--data-dir data] [-clean]
+  w9y backup [-data-dir data] [dest-dir]
+  w9y restore [-data-dir data] [backup-dir]
+  w9y gc [-data-dir data] [-clean]
 
 env:
   PORT      start server mode on this port when present
-  DATA_DIR  server storage directory (default data)
+  DATA_DIR  data directory (default data)
   W9Y       remote server URL (default https://w9y.up.railway.app/)`)
 	return nil
 }
@@ -198,7 +198,7 @@ func sha256Hex(body []byte) string {
 }
 
 func contentType(remotePath string) string {
-	if path.Ext(strings.TrimSuffix(remotePath, ".gz")) == ".wasm" {
+	if path.Ext(remotePath) == ".wasm" {
 		return "application/wasm"
 	}
 	if typ := mime.TypeByExtension(path.Ext(remotePath)); typ != "" {

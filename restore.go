@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,7 +15,7 @@ import (
 
 func restore(args []string) error {
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
-	dataDir := fs.String("data-dir", "", "backup source directory (default data)")
+	dataDir := fs.String("data-dir", getenv("DATA_DIR", "data"), "backup source directory")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), `usage: w9y restore [-data-dir data] [backup-dir]
 
@@ -31,9 +32,6 @@ flags:
 	if backupDir == "" {
 		backupDir = *dataDir
 	}
-	if backupDir == "" {
-		backupDir = "data"
-	}
 	if fs.NArg() > 1 {
 		return errors.New("restore takes at most one argument (backup directory)")
 	}
@@ -46,7 +44,7 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "restoring %d entries from %s\n", len(m.Entries), backupDir)
+	slog.Info("restoring entries", "count", len(m.Entries), "dir", backupDir)
 
 	type blobEntry struct {
 		path string
@@ -74,11 +72,11 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 		for _, be := range entries {
 			u, _ := url.Parse(host)
 			u.Path, _ = url.JoinPath(u.Path, be.path)
+			u.RawQuery = "sha256=" + sha
 
 			var body io.Reader
 			if exists {
 				body = http.NoBody
-				u.RawQuery = "sha256=" + sha
 			} else {
 				body = bytes.NewReader(gzData)
 			}
@@ -104,7 +102,7 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 			if !exists {
 				verb = "uploaded"
 			}
-			fmt.Fprintf(os.Stderr, "  %s %s -> blob/%s.wasm.gz\n", verb, be.path, sha)
+			slog.Info(verb+" entry", "path", be.path, "blob", sha)
 			if exists {
 				linked++
 			} else {
@@ -114,6 +112,6 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "restore complete: %d uploaded, %d linked\n", uploaded, linked)
+	slog.Info("restore complete", "uploaded", uploaded, "linked", linked)
 	return nil
 }

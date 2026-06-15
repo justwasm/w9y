@@ -3,6 +3,7 @@ package w9y
 import (
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,15 @@ func gc(args []string) error {
 	fs := flag.NewFlagSet("gc", flag.ContinueOnError)
 	clean := fs.Bool("clean", false, "delete orphaned blobs instead of dry-run")
 	dataDir := fs.String("data-dir", getenv("DATA_DIR", defaultDataDir), "data directory")
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), `usage: w9y gc [-data-dir data] [-clean]
+
+Find unreferenced blobs in the data directory.
+
+flags:
+  -data-dir  data directory (default data)
+  -clean     delete orphaned blobs instead of dry-run`)
+	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -38,11 +48,11 @@ func gcData(dataDir string, clean bool) error {
 		return err
 	}
 
-	for _, entry := range entries {
-		if entry.IsDir() {
+	for _, de := range entries {
+		if de.IsDir() {
 			continue
 		}
-		name := entry.Name()
+		name := de.Name()
 		sha, ok := strings.CutSuffix(name, ".wasm.gz")
 		if !ok {
 			continue
@@ -55,9 +65,9 @@ func gcData(dataDir string, clean bool) error {
 			if err := os.Remove(path); err != nil {
 				return fmt.Errorf("remove %s: %v", name, err)
 			}
-			fmt.Println("removed", name)
+			slog.Info("removed orphan blob", "name", name)
 		} else {
-			fmt.Println(name)
+			slog.Info("orphan blob", "name", name)
 		}
 	}
 

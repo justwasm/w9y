@@ -20,7 +20,7 @@ func TestUploadStoresBlobAndMappingEntry(t *testing.T) {
 
 	body := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
 	gz := mustGzip(t, body)
-	sha := sha256Hex(gz)
+	sha := sha256Hex(body)
 
 	req := httptest.NewRequest(http.MethodPut, "/foo.wasm", bytes.NewReader(gz))
 	rec := httptest.NewRecorder()
@@ -70,7 +70,7 @@ func TestLinkOnlyViaQueryParam(t *testing.T) {
 
 	body := []byte("wasm")
 	gz := mustGzip(t, body)
-	sha := sha256Hex(gz)
+	sha := sha256Hex(body)
 
 	// First upload: store the blob
 	req := httptest.NewRequest(http.MethodPut, "/one.wasm", bytes.NewReader(gz))
@@ -144,7 +144,7 @@ func TestBlobPathServesDirectly(t *testing.T) {
 	dir := t.TempDir()
 	server := NewServer(dir)
 	gz := mustGzip(t, []byte("wasm"))
-	sha := sha256Hex(gz)
+	sha := sha256Hex([]byte("wasm"))
 
 	req := httptest.NewRequest(http.MethodPut, "/foo.wasm", bytes.NewReader(gz))
 	rec := httptest.NewRecorder()
@@ -308,7 +308,7 @@ func TestBackupRemoteDownloadsEntriesAndBlobs(t *testing.T) {
 
 	body := []byte("wasm")
 	gz := mustGzip(t, body)
-	sha := sha256Hex(gz)
+	sha := sha256Hex(body)
 
 	for _, path := range []string{"/foo.wasm", "/bar.wasm"} {
 		req := httptest.NewRequest(http.MethodPut, path, bytes.NewReader(gz))
@@ -400,7 +400,7 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 
 	body := []byte("wasm")
 	gz := mustGzip(t, body)
-	sha := sha256Hex(gz)
+	sha := sha256Hex(body)
 
 	req := httptest.NewRequest(http.MethodPut, "/foo.wasm", bytes.NewReader(gz))
 	rec := httptest.NewRecorder()

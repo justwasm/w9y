@@ -2,9 +2,11 @@ package w9y
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,7 +16,7 @@ import (
 
 func backup(args []string) error {
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
-	dataDir := fs.String("data-dir", "", "backup destination directory (default data)")
+	dataDir := fs.String("data-dir", getenv("DATA_DIR", "data"), "backup destination directory")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), `usage: w9y backup [-data-dir data] [dest-dir]
 
@@ -26,13 +28,13 @@ flags:
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if fs.NArg() > 1 {
+		return errors.New("backup takes at most one argument (destination directory)")
+	}
 	host := defaultHost
 	destDir := fs.Arg(0)
 	if destDir == "" {
 		destDir = *dataDir
-	}
-	if destDir == "" {
-		destDir = "data"
 	}
 	return backupRemote(http.DefaultClient, host, destDir)
 }
@@ -64,7 +66,7 @@ func backupRemote(client *http.Client, host, destDir string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "fetched %d entries from remote\n", len(items))
+	slog.Info("fetched entries from remote", "count", len(items))
 	for _, item := range items {
 		t, parseErr := time.Parse(time.RFC3339Nano, item.Time)
 		if parseErr != nil {
@@ -77,7 +79,11 @@ func backupRemote(client *http.Client, host, destDir string) error {
 	}
 
 	blobClient := client
-	if tr, ok := http.DefaultTransport.(*http.Transport); ok {
+	if tr, ok := client.Transport.(*http.Transport); ok {
+		clone := tr.Clone()
+		clone.DisableCompression = true
+		blobClient = &http.Client{Transport: clone}
+	} else if tr, ok := http.DefaultTransport.(*http.Transport); ok {
 		clone := tr.Clone()
 		clone.DisableCompression = true
 		blobClient = &http.Client{Transport: clone}
@@ -118,12 +124,12 @@ func backupRemote(client *http.Client, host, destDir string) error {
 		if err := os.WriteFile(gzPath, gzData, 0o644); err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "downloaded blob/%s.wasm.gz (%.2f MB)\n", item.SHA256, float64(len(gzData))/(1024*1024))
+		slog.Info("downloaded blob", "sha", item.SHA256, "size_mb", float64(len(gzData))/(1024*1024))
 		downloaded++
 	}
 
 	if downloaded > 0 || skipped > 0 {
-		fmt.Fprintf(os.Stderr, "backup complete: %d downloaded, %d already present\n", downloaded, skipped)
+		slog.Info("backup complete", "downloaded", downloaded, "skipped", skipped)
 	}
 
 	return nil
