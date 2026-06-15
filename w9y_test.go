@@ -1,4 +1,4 @@
-package main
+package w9y
 
 import (
 	"bytes"
@@ -13,7 +13,7 @@ import (
 
 func TestUploadGeneratesGzipAndServesWasmWithGzipHeaders(t *testing.T) {
 	dir := t.TempDir()
-	server := newServer(dir)
+	server := NewServer(dir)
 
 	body := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
 	req := httptest.NewRequest(http.MethodPut, "/foo.wasm", bytes.NewReader(body))
