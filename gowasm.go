@@ -67,10 +67,32 @@ func handleGoWasm(w http.ResponseWriter, r *http.Request, dataDir, remotePath st
 		return
 	}
 
-	// If version is empty or "latest", list available versions
+	// "latest" or empty → resolve to actual latest version and redirect
 	if gwp.Version == "" || gwp.Version == "latest" {
-		listGoVersions(w, r, gwp.ImportPath)
+		version, err := resolvePseudoVersion(r.Context(), gwp.ImportPath, "latest")
+		if err != nil {
+			// Fallback: list versions if resolution fails
+			listGoVersions(w, r, gwp.ImportPath)
+			return
+		}
+		canonical := goWasmPrefix + gwp.ImportPath + "@" + version
+		http.Redirect(w, r, canonical, http.StatusFound)
 		return
+	}
+
+	// Resolve non-canonical references (commit hashes, branch names, etc.)
+	// to their canonical pseudo-versions for cleaner mapping paths.
+	if !isPseudoVersion(gwp.Version) {
+		version, err := resolvePseudoVersion(r.Context(), gwp.ImportPath, gwp.Version)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		if version != gwp.Version {
+			canonical := goWasmPrefix + gwp.ImportPath + "@" + version
+			http.Redirect(w, r, canonical, http.StatusFound)
+			return
+		}
 	}
 
 	// Concrete version — build or wait, then serve
@@ -81,6 +103,53 @@ func handleGoWasm(w http.ResponseWriter, r *http.Request, dataDir, remotePath st
 	}
 	gzPath := blobPath(dataDir, sha, true)
 	serveGzipFile(w, r, gzPath)
+}
+
+// isPseudoVersion reports whether s is an already-canonical Go module version
+// — either a semver tag (v0.28.1) or a pseudo-version (v0.0.0-20260615105154-368618324f3e).
+// Non-canonical refs (commit hashes, branch names) trigger resolution via go list.
+func isPseudoVersion(s string) bool {
+	if len(s) < 5 || s[0] != 'v' {
+		return false
+	}
+	// Check it starts with v<major>.<minor>.<patch>
+	dots := 0
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		if c == '.' {
+			dots++
+			continue
+		}
+		if c < '0' || c > '9' {
+			return dots >= 2
+		}
+	}
+	return dots >= 2
+}
+
+// resolvePseudoVersion resolves a commit hash to a Go pseudo-version
+// via "go list -m -json <importPath>@<commit>".
+func resolvePseudoVersion(ctx context.Context, importPath, commit string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "go", "list", "-m", "-json", importPath+"@"+commit)
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("resolve %s@%s: %w", importPath, commit, err)
+	}
+
+	var info struct {
+		Version string `json:"Version"`
+	}
+	if err := json.Unmarshal(out, &info); err != nil {
+		return "", fmt.Errorf("parse module info: %w", err)
+	}
+	if info.Version == "" {
+		return "", fmt.Errorf("no version found for %s@%s", importPath, commit)
+	}
+	return info.Version, nil
 }
 
 func listGoVersions(w http.ResponseWriter, r *http.Request, importPath string) {

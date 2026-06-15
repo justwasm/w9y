@@ -556,25 +556,27 @@ func TestParseGoWasmPath(t *testing.T) {
 	}
 }
 
-func TestGoWasmPathReturnsInfoWhenNoVersion(t *testing.T) {
+func TestGoWasmPathWithNoVersionRedirectsToLatest(t *testing.T) {
 	dir := t.TempDir()
 	server := NewServer(dir)
 
-	// No version specified — should return informative message, not 404
 	req := httptest.NewRequest(http.MethodGet, "/go/github.com/btwiuse/w9y", nil)
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	// Should redirect (302) to latest version, or fall back to listing (200)
+	if rec.Code != http.StatusFound && rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 302 or 200", rec.Code)
 	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "@<version>") && !strings.Contains(body, "version") {
-		t.Fatalf("expected version prompt, got: %s", body)
+	if rec.Code == http.StatusFound {
+		loc := rec.Header().Get("Location")
+		if !strings.HasPrefix(loc, "/go/github.com/btwiuse/w9y@") {
+			t.Fatalf("Location = %q, want /go/github.com/btwiuse/w9y@...", loc)
+		}
 	}
 }
 
-func TestGoWasmPathWithLatestReturnsInfo(t *testing.T) {
+func TestGoWasmPathWithLatestRedirectsToVersion(t *testing.T) {
 	dir := t.TempDir()
 	server := NewServer(dir)
 
@@ -582,8 +584,8 @@ func TestGoWasmPathWithLatestReturnsInfo(t *testing.T) {
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusFound && rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 302 or 200", rec.Code)
 	}
 }
 
