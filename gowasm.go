@@ -2,9 +2,13 @@ package w9y
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -234,22 +238,43 @@ func doBuildGoWasm(reqCtx context.Context, dataDir, importPath, version, remoteP
 		return "", fmt.Errorf("output not found in %s: empty directory", binDir)
 	}
 
-	wasm, err := os.ReadFile(filepath.Join(binDir, entries[0].Name()))
+	wasmPath := filepath.Join(binDir, entries[0].Name())
+	f, err := os.Open(wasmPath)
 	if err != nil {
 		return "", err
 	}
+	defer f.Close()
 
-	sha := sha256Hex(wasm)
-	gz, err := gzipBytes(wasm)
-	if err != nil {
+	// Stream through gzip + sha256 simultaneously — no full []byte in memory
+	gzDir := filepath.Dir(blobPath(dataDir, "x", true))
+	if err := os.MkdirAll(gzDir, 0o755); err != nil {
 		return "", err
 	}
+	tmp, tmpErr := os.CreateTemp(gzDir, "*.wasm.gz")
+	if tmpErr != nil {
+		return "", tmpErr
+	}
+	tmpName := tmp.Name()
+	h := sha256.New()
+	gzw, err := gzip.NewWriterLevel(tmp, gzip.BestCompression)
+	if err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return "", err
+	}
+	if _, err := io.Copy(io.MultiWriter(h, gzw), f); err != nil {
+		gzw.Close()
+		tmp.Close()
+		os.Remove(tmpName)
+		return "", err
+	}
+	gzw.Close()
+	tmp.Close()
 
+	sha := hex.EncodeToString(h.Sum(nil))
 	gzPath := blobPath(dataDir, sha, true)
-	if err := os.MkdirAll(filepath.Dir(gzPath), 0o755); err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(gzPath, gz, 0o644); err != nil {
+	if err := os.Rename(tmpName, gzPath); err != nil {
+		os.Remove(tmpName)
 		return "", err
 	}
 

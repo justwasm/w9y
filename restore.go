@@ -1,7 +1,6 @@
 package w9y
 
 import (
-	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -58,9 +57,15 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 	var uploaded, linked int
 	for sha, entries := range shaToEntries {
 		gzPath := blobPath(backupDir, sha, true)
-		gzData, err := os.ReadFile(gzPath)
+		f, err := os.Open(gzPath)
 		if err != nil {
 			return fmt.Errorf("missing blob %s in backup: %v", sha, err)
+		}
+		defer f.Close()
+
+		fi, err := f.Stat()
+		if err != nil {
+			return fmt.Errorf("stat blob %s: %v", sha, err)
 		}
 
 		blobRemote := blobRemotePath(sha, true)
@@ -78,12 +83,18 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 			if exists {
 				body = http.NoBody
 			} else {
-				body = bytes.NewReader(gzData)
+				if _, err := f.Seek(0, io.SeekStart); err != nil {
+					return fmt.Errorf("seek blob %s: %v", sha, err)
+				}
+				body = f
 			}
 
 			req, err := http.NewRequest(http.MethodPut, u.String(), body)
 			if err != nil {
 				return fmt.Errorf("restore %s: %v", be.path, err)
+			}
+			if !exists {
+				req.ContentLength = fi.Size()
 			}
 			req.Header.Set("Content-Type", "application/gzip")
 			req.Header.Set("Content-Encoding", "gzip")

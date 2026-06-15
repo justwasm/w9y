@@ -109,22 +109,42 @@ func backupRemote(client *http.Client, host, destDir string) error {
 		if err != nil {
 			return fmt.Errorf("download blob %s: %v", item.SHA256, err)
 		}
-		gzData, readErr := io.ReadAll(blobResp.Body)
-		blobResp.Body.Close()
 		if blobResp.StatusCode != http.StatusOK {
+			blobResp.Body.Close()
 			return fmt.Errorf("download blob %s: %s", item.SHA256, blobResp.Status)
-		}
-		if readErr != nil {
-			return fmt.Errorf("read blob %s: %v", item.SHA256, readErr)
 		}
 
 		if err := os.MkdirAll(filepath.Dir(gzPath), 0o755); err != nil {
+			blobResp.Body.Close()
 			return err
 		}
-		if err := os.WriteFile(gzPath, gzData, 0o644); err != nil {
+		tmp, tmpErr := os.CreateTemp(filepath.Dir(gzPath), "*.wasm.gz")
+		if tmpErr != nil {
+			blobResp.Body.Close()
+			return tmpErr
+		}
+		tmpName := tmp.Name()
+		if _, copyErr := io.Copy(tmp, blobResp.Body); copyErr != nil {
+			blobResp.Body.Close()
+			tmp.Close()
+			os.Remove(tmpName)
+			return fmt.Errorf("download blob %s: %v", item.SHA256, copyErr)
+		}
+		blobResp.Body.Close()
+		if err := tmp.Close(); err != nil {
+			os.Remove(tmpName)
 			return err
 		}
-		slog.Info("downloaded blob", "sha", item.SHA256, "size_mb", float64(len(gzData))/(1024*1024))
+		if err := os.Rename(tmpName, gzPath); err != nil {
+			os.Remove(tmpName)
+			return err
+		}
+		fi, _ := os.Stat(gzPath)
+		var sizeMB float64
+		if fi != nil {
+			sizeMB = float64(fi.Size()) / (1024 * 1024)
+		}
+		slog.Info("downloaded blob", "sha", item.SHA256, "size_mb", sizeMB)
 		downloaded++
 	}
 
