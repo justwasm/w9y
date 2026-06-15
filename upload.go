@@ -37,12 +37,7 @@ func uploadWithClient(args []string, client *http.Client) error {
 	if err != nil {
 		return err
 	}
-
-	gz, err := gzipBytes(wasm)
-	if err != nil {
-		return err
-	}
-	sha := sha256Hex(gz)
+	sha := sha256Hex(wasm)
 
 	host := defaultHost
 
@@ -57,6 +52,10 @@ func uploadWithClient(args []string, client *http.Client) error {
 	if exists {
 		body = http.NoBody
 	} else {
+		gz, err := gzipBytes(wasm)
+		if err != nil {
+			return err
+		}
 		beforeMB := float64(len(wasm)) / (1024 * 1024)
 		afterMB := float64(len(gz)) / (1024 * 1024)
 		fmt.Fprintf(os.Stderr, "compressing %s, %.2f MB -> %.2f MB\n", fileName, beforeMB, afterMB)
@@ -71,9 +70,7 @@ func uploadWithClient(args []string, client *http.Client) error {
 	if err != nil {
 		return err
 	}
-	if exists {
-		u.RawQuery = "sha=" + sha
-	}
+	u.RawQuery = "sha256=" + sha
 
 	req, err := http.NewRequest(http.MethodPut, u.String(), body)
 	if err != nil {

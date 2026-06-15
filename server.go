@@ -95,17 +95,33 @@ func handleUpload(w http.ResponseWriter, r *http.Request, dataDir, remotePath st
 
 	var sha string
 	linked := false
-	if s := r.URL.Query().Get("sha"); s != "" {
-		linked = true
+	if s := r.URL.Query().Get("sha256"); s != "" {
 		sha = s
 		gzPath := blobPath(dataDir, sha, true)
-		if _, err := os.Stat(gzPath); err != nil {
-			if os.IsNotExist(err) {
+		if _, err := os.Stat(gzPath); os.IsNotExist(err) {
+			// Blob not yet stored — write body to disk
+			gz, readErr := io.ReadAll(r.Body)
+			if readErr != nil {
+				http.Error(w, readErr.Error(), http.StatusBadRequest)
+				return
+			}
+			if len(gz) == 0 {
 				http.Error(w, "blob not found", http.StatusNotFound)
 				return
 			}
+			if err := os.MkdirAll(filepath.Dir(gzPath), 0o755); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if err := os.WriteFile(gzPath, gz, 0o644); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		} else if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		} else {
+			linked = true
 		}
 	} else {
 		gz, err := io.ReadAll(r.Body)

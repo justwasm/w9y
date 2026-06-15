@@ -81,7 +81,7 @@ func TestLinkOnlyViaQueryParam(t *testing.T) {
 	}
 
 	// Second upload: link-only via query param, no body
-	req = httptest.NewRequest(http.MethodPut, "/two.wasm?sha="+sha, http.NoBody)
+	req = httptest.NewRequest(http.MethodPut, "/two.wasm?sha256="+sha, http.NoBody)
 	rec = httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -117,7 +117,7 @@ func TestLinkOnlyRejectsMissingBlob(t *testing.T) {
 	dir := t.TempDir()
 	server := NewServer(dir)
 
-	req := httptest.NewRequest(http.MethodPut, "/foo.wasm?sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", http.NoBody)
+	req := httptest.NewRequest(http.MethodPut, "/foo.wasm?sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", http.NoBody)
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -223,8 +223,7 @@ func TestRootListsEntriesSortedByTime(t *testing.T) {
 
 func TestClientUploadWithPrecheck(t *testing.T) {
 	body := []byte("wasm")
-	gz := mustGzip(t, body)
-	sha := sha256Hex(gz)
+	sha := sha256Hex(body)
 
 	var requests []struct{ method, path, query string }
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -257,20 +256,20 @@ func TestClientUploadWithPrecheck(t *testing.T) {
 	if requests[0].method != "HEAD" || requests[0].path != blobRemotePath(sha, true) {
 		t.Fatalf("request 0 = %s %s, want HEAD %s", requests[0].method, requests[0].path, blobRemotePath(sha, true))
 	}
-	if requests[1].method != "PUT" || requests[1].path != "/bar.wasm" || requests[1].query != "sha="+sha {
-		t.Fatalf("request 1 = %s %s?%s, want PUT /bar.wasm?sha=%s", requests[1].method, requests[1].path, requests[1].query, sha)
+	if requests[1].method != "PUT" || requests[1].path != "/bar.wasm" || requests[1].query != "sha256="+sha {
+		t.Fatalf("request 1 = %s %s?%s, want PUT /bar.wasm?sha256=%s", requests[1].method, requests[1].path, requests[1].query, sha)
 	}
 }
 
 func TestClientUploadSendsBodyWhenBlobMissing(t *testing.T) {
 	body := []byte("wasm")
 	gz := mustGzip(t, body)
-	sha := sha256Hex(gz)
+	sha := sha256Hex(body)
 
-	var requests []struct{ method, path string }
+	var requests []struct{ method, path, query string }
 	var uploaded []byte
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		requests = append(requests, struct{ method, path string }{req.Method, req.URL.Path})
+		requests = append(requests, struct{ method, path, query string }{req.Method, req.URL.Path, req.URL.RawQuery})
 		switch req.Method {
 		case http.MethodHead:
 			return textResponse(http.StatusNotFound, ""), nil
@@ -295,8 +294,8 @@ func TestClientUploadSendsBodyWhenBlobMissing(t *testing.T) {
 	if requests[0].method != "HEAD" || requests[0].path != blobRemotePath(sha, true) {
 		t.Fatalf("request 0 = %s %s, want HEAD %s", requests[0].method, requests[0].path, blobRemotePath(sha, true))
 	}
-	if requests[1].method != "PUT" || requests[1].path != "/foo.wasm" {
-		t.Fatalf("request 1 = %s %s, want PUT /foo.wasm", requests[1].method, requests[1].path)
+	if requests[1].method != "PUT" || requests[1].path != "/foo.wasm" || requests[1].query != "sha256="+sha {
+		t.Fatalf("request 1 = %s %s?%s, want PUT /foo.wasm?sha256=%s", requests[1].method, requests[1].path, requests[1].query, sha)
 	}
 	if !bytes.Equal(uploaded, gz) {
 		t.Fatal("uploaded body does not match gzipped content")

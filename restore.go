@@ -59,7 +59,7 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 			var body io.Reader
 			if exists {
 				body = http.NoBody
-				u.RawQuery = "sha=" + sha
+				u.RawQuery = "sha256=" + sha
 			} else {
 				body = bytes.NewReader(gzData)
 			}
