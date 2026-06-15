@@ -18,6 +18,8 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -221,22 +223,12 @@ func backupData(dataDir, tarball string) error {
 			return err
 		}
 		name := filepath.ToSlash(rel)
-		if skipBackupEntry(name) {
-			return nil
-		}
 
-		info, err := os.Lstat(filePath)
+		info, err := os.Stat(filePath)
 		if err != nil {
 			return err
 		}
-		link := ""
-		if info.Mode()&os.ModeSymlink != 0 {
-			link, err = os.Readlink(filePath)
-			if err != nil {
-				return err
-			}
-		}
-		hdr, err := tar.FileInfoHeader(info, link)
+		hdr, err := tar.FileInfoHeader(info, "")
 		if err != nil {
 			return err
 		}
@@ -290,20 +282,7 @@ func restoreData(dataDir, tarball string) error {
 			if err := os.MkdirAll(dst, os.FileMode(hdr.Mode)); err != nil {
 				return err
 			}
-		case tar.TypeSymlink:
-			if err := validateSymlinkTarget(dataDir, dst, hdr.Linkname); err != nil {
-				return err
-			}
-			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-				return err
-			}
-			if err := os.RemoveAll(dst); err != nil {
-				return err
-			}
-			if err := os.Symlink(hdr.Linkname, dst); err != nil {
-				return err
-			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 				return err
 			}
@@ -324,39 +303,7 @@ func restoreData(dataDir, tarball string) error {
 		}
 	}
 
-	return restoreMissingWasmBlobs(dataDir)
-}
-
-func restoreMissingWasmBlobs(dataDir string) error {
-	blobDir := filepath.Join(dataDir, "blob")
-	entries, err := os.ReadDir(blobDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".wasm.gz") {
-			continue
-		}
-		gzPath := filepath.Join(blobDir, name)
-		wasmPath := strings.TrimSuffix(gzPath, ".gz")
-		if _, err := os.Stat(wasmPath); err == nil {
-			continue
-		} else if !os.IsNotExist(err) {
-			return err
-		}
-		if err := gunzipFile(gzPath, wasmPath); err != nil {
-			return err
-		}
-	}
 	return nil
-}
-
-func skipBackupEntry(name string) bool {
-	return strings.HasPrefix(name, "blob/") && strings.HasSuffix(name, ".wasm") && !strings.HasSuffix(name, ".wasm.gz")
 }
 
 func safeTarPath(dataDir, name string) (string, error) {
@@ -369,21 +316,6 @@ func safeTarPath(dataDir, name string) (string, error) {
 		return "", fmt.Errorf("invalid tar path %q", name)
 	}
 	return filepath.Join(dataDir, filepath.FromSlash(clean)), nil
-}
-
-func validateSymlinkTarget(dataDir, linkPath, target string) error {
-	if filepath.IsAbs(target) {
-		return fmt.Errorf("refusing absolute symlink %q", target)
-	}
-	resolved := filepath.Clean(filepath.Join(filepath.Dir(linkPath), target))
-	rel, err := filepath.Rel(dataDir, resolved)
-	if err != nil {
-		return err
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("refusing symlink outside data dir %q", target)
-	}
-	return nil
 }
 
 // NewServer returns the w9y HTTP handler.
@@ -433,46 +365,57 @@ func handleUpload(w http.ResponseWriter, r *http.Request, dataDir, remotePath st
 		return
 	}
 
-	if r.Header.Get(headerLinkOnly) == "1" {
-		if _, err := os.Stat(blobPath(dataDir, sha, true)); err != nil {
-			if os.IsNotExist(err) {
-				http.Error(w, "blob not found", http.StatusNotFound)
-				return
-			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+	gzPath := blobPath(dataDir, sha, true)
+	if _, err := os.Stat(gzPath); os.IsNotExist(err) {
+		if r.Header.Get(headerLinkOnly) == "1" {
+			http.Error(w, "blob not found", http.StatusNotFound)
 			return
 		}
-	} else if err := storeCompressedBlob(dataDir, sha, r.Body); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		if err := storeCompressedBlob(dataDir, sha, r.Body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
-	if err := linkPathToBlob(dataDir, remotePath, sha); err != nil {
+	mapping, err := loadMapping(dataDir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	mapping[remotePath] = sha
+	if err := saveMapping(dataDir, mapping); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusCreated)
-	fmt.Fprintf(w, "uploaded %s -> %s", remotePath, blobRemotePath(sha, false))
+	fmt.Fprintf(w, "uploaded %s -> blob/%s.wasm.gz", remotePath, sha)
 }
 
 func handleDownload(w http.ResponseWriter, r *http.Request, dataDir, remotePath string) {
-	filePath := storagePath(dataDir, remotePath)
-	resolved, err := filepath.EvalSymlinks(filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			http.NotFound(w, r)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	// blob path serves the gzip file directly
+	if isBlobRemotePath(remotePath) {
+		gzPath := storagePath(dataDir, remotePath)
+		serveGzipFile(w, r, gzPath)
 		return
 	}
 
-	gzPath := resolved + ".gz"
-	if strings.HasSuffix(resolved, ".gz") {
-		gzPath = resolved
+	mapping, err := loadMapping(dataDir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
+	sha, ok := mapping[remotePath]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	gzPath := blobPath(dataDir, sha, true)
+	serveGzipFile(w, r, gzPath)
+}
+
+func serveGzipFile(w http.ResponseWriter, r *http.Request, gzPath string) {
 	file, err := os.Open(gzPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -490,15 +433,47 @@ func handleDownload(w http.ResponseWriter, r *http.Request, dataDir, remotePath 
 		return
 	}
 
-	w.Header().Set("Content-Type", contentType(remotePath))
+	// Determine the virtual path for content type (strip .gz)
+	virtualPath := strings.TrimSuffix(gzPath, ".gz")
+	w.Header().Set("Content-Type", contentType(virtualPath))
 	w.Header().Set("Content-Encoding", "gzip")
 	w.Header().Set("Vary", "Accept-Encoding")
-	http.ServeContent(w, r, path.Base(remotePath)+".gz", stat.ModTime(), file)
+	http.ServeContent(w, r, path.Base(virtualPath)+".gz", stat.ModTime(), file)
+}
+
+func loadMapping(dataDir string) (map[string]string, error) {
+	mappingPath := filepath.Join(dataDir, "mapping.yaml")
+	data, err := os.ReadFile(mappingPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return make(map[string]string), nil
+		}
+		return nil, err
+	}
+	var m map[string]string
+	if err := yaml.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	if m == nil {
+		m = make(map[string]string)
+	}
+	return m, nil
+}
+
+func saveMapping(dataDir string, mapping map[string]string) error {
+	mappingPath := filepath.Join(dataDir, "mapping.yaml")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return err
+	}
+	data, err := yaml.Marshal(mapping)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(mappingPath, data, 0o644)
 }
 
 func storeCompressedBlob(dataDir, sha string, body io.Reader) error {
 	gzPath := blobPath(dataDir, sha, true)
-	wasmPath := blobPath(dataDir, sha, false)
 	if err := os.MkdirAll(filepath.Dir(gzPath), 0o755); err != nil {
 		return err
 	}
@@ -509,9 +484,8 @@ func storeCompressedBlob(dataDir, sha string, body io.Reader) error {
 	if err != nil {
 		return fmt.Errorf("invalid gzip body: %w", err)
 	}
-	var wasm bytes.Buffer
 	hasher := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(&wasm, hasher), gr); err != nil {
+	if _, err := io.Copy(hasher, gr); err != nil {
 		gr.Close()
 		return err
 	}
@@ -527,26 +501,7 @@ func storeCompressedBlob(dataDir, sha string, body io.Reader) error {
 		return fmt.Errorf("sha256 mismatch: got %s, want %s", got, sha)
 	}
 
-	if err := os.WriteFile(gzPath, gz.Bytes(), 0o644); err != nil {
-		return err
-	}
-	return os.WriteFile(wasmPath, wasm.Bytes(), 0o644)
-}
-
-func linkPathToBlob(dataDir, remotePath, sha string) error {
-	linkPath := storagePath(dataDir, remotePath)
-	targetPath := blobPath(dataDir, sha, false)
-	if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
-		return err
-	}
-	target, err := filepath.Rel(filepath.Dir(linkPath), targetPath)
-	if err != nil {
-		return err
-	}
-	if err := os.RemoveAll(linkPath); err != nil {
-		return err
-	}
-	return os.Symlink(target, linkPath)
+	return os.WriteFile(gzPath, gz.Bytes(), 0o644)
 }
 
 func gzipBytes(src []byte) ([]byte, error) {
@@ -565,29 +520,6 @@ func gzipBytes(src []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func gunzipFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	gz, err := gzip.NewReader(in)
-	if err != nil {
-		return err
-	}
-	defer gz.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	_, copyErr := io.Copy(out, gz)
-	closeErr := out.Close()
-	if copyErr != nil {
-		return copyErr
-	}
-	return closeErr
-}
-
 func cleanUploadPath(remotePath string) (string, error) {
 	clean, err := cleanRemotePath(remotePath)
 	if err != nil {
@@ -600,17 +532,18 @@ func cleanUploadPath(remotePath string) (string, error) {
 }
 
 func cleanRemotePath(remotePath string) (string, error) {
-	if remotePath == "" || remotePath == "/" {
-		return "", errors.New("path is required")
+	u, err := url.Parse(remotePath)
+	if err != nil {
+		return "", err
 	}
-	if !strings.HasPrefix(remotePath, "/") {
-		remotePath = "/" + remotePath
+	p := u.Path
+	if p == "" {
+		return "", fmt.Errorf("invalid remote path %q", remotePath)
 	}
-	clean := path.Clean(remotePath)
-	if clean == "/" || strings.Contains(clean, "../") || strings.Contains(clean, "/..") {
-		return "", fmt.Errorf("invalid path %q", remotePath)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
 	}
-	return clean, nil
+	return p, nil
 }
 
 func storagePath(dataDir, remotePath string) string {
@@ -652,20 +585,16 @@ func contentType(remotePath string) string {
 }
 
 func joinEndpoint(host, remotePath string) (string, error) {
-	u, err := url.Parse(host)
+	u, err := url.JoinPath(host, remotePath)
 	if err != nil {
 		return "", err
 	}
-	if u.Scheme == "" || u.Host == "" {
-		return "", fmt.Errorf("invalid HOST %q", host)
-	}
-	u.Path = path.Join(u.Path, remotePath)
-	return u.String(), nil
+	return u, nil
 }
 
 func getenv(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
+	if v := os.Getenv(key); v != "" {
+		return v
 	}
 	return fallback
 }

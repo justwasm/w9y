@@ -1,7 +1,6 @@
 package w9y
 
 import (
-	"archive/tar"
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
@@ -16,7 +15,7 @@ import (
 	"testing"
 )
 
-func TestUploadStoresContentAddressedBlobAndServesSymlinkPath(t *testing.T) {
+func TestUploadStoresBlobAndMappingEntry(t *testing.T) {
 	dir := t.TempDir()
 	server := NewServer(dir)
 
@@ -30,18 +29,16 @@ func TestUploadStoresContentAddressedBlobAndServesSymlinkPath(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("upload status = %d, want %d: %s", rec.Code, http.StatusCreated, rec.Body.String())
 	}
-	if _, err := os.Stat(filepath.Join(dir, "blob", sha+".wasm")); err != nil {
-		t.Fatalf("expected wasm blob: %v", err)
-	}
 	if _, err := os.Stat(filepath.Join(dir, "blob", sha+".wasm.gz")); err != nil {
 		t.Fatalf("expected gzip blob: %v", err)
 	}
-	link, err := os.Readlink(filepath.Join(dir, "foo.wasm"))
+
+	mapping, err := loadMapping(dir)
 	if err != nil {
-		t.Fatalf("expected symlink: %v", err)
+		t.Fatal(err)
 	}
-	if link != filepath.Join("blob", sha+".wasm") {
-		t.Fatalf("symlink = %q, want %q", link, filepath.Join("blob", sha+".wasm"))
+	if mapping["/foo.wasm"] != sha {
+		t.Fatalf("mapping = %v, want /foo.wasm -> %s", mapping, sha)
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/foo.wasm", nil)
@@ -65,48 +62,10 @@ func TestUploadStoresContentAddressedBlobAndServesSymlinkPath(t *testing.T) {
 	}
 }
 
-func TestUploadRejectsBlobDestination(t *testing.T) {
+func TestMultiplePathsMapToSameBlob(t *testing.T) {
 	dir := t.TempDir()
 	server := NewServer(dir)
-	body := []byte("wasm")
 
-	req := httptest.NewRequest(http.MethodPut, "/blob/manual.wasm", bytes.NewReader(mustGzip(t, body)))
-	req.Header.Set(headerBlobSHA256, sha256Hex(body))
-	rec := httptest.NewRecorder()
-	server.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("upload status = %d, want %d", rec.Code, http.StatusBadRequest)
-	}
-}
-
-func TestNestedUploadUsesRelativeSymlink(t *testing.T) {
-	dir := t.TempDir()
-	server := NewServer(dir)
-	body := []byte("wasm")
-	sha := sha256Hex(body)
-
-	req := httptest.NewRequest(http.MethodPut, "/a/b/foo.wasm", bytes.NewReader(mustGzip(t, body)))
-	req.Header.Set(headerBlobSHA256, sha)
-	rec := httptest.NewRecorder()
-	server.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("upload status = %d, want %d: %s", rec.Code, http.StatusCreated, rec.Body.String())
-	}
-	link, err := os.Readlink(filepath.Join(dir, "a", "b", "foo.wasm"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := filepath.Join("..", "..", "blob", sha+".wasm")
-	if link != want {
-		t.Fatalf("symlink = %q, want %q", link, want)
-	}
-}
-
-func TestLinkOnlyUploadUsesExistingBlob(t *testing.T) {
-	dir := t.TempDir()
-	server := NewServer(dir)
 	body := []byte("wasm")
 	sha := sha256Hex(body)
 
@@ -126,12 +85,53 @@ func TestLinkOnlyUploadUsesExistingBlob(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("link status = %d, want %d: %s", rec.Code, http.StatusCreated, rec.Body.String())
 	}
-	link, err := os.Readlink(filepath.Join(dir, "two.wasm"))
+
+	mapping, err := loadMapping(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if link != filepath.Join("blob", sha+".wasm") {
-		t.Fatalf("symlink = %q, want blob link", link)
+	if mapping["/one.wasm"] != sha {
+		t.Fatalf("mapping /one.wasm = %q, want %q", mapping["/one.wasm"], sha)
+	}
+	if mapping["/two.wasm"] != sha {
+		t.Fatalf("mapping /two.wasm = %q, want %q", mapping["/two.wasm"], sha)
+	}
+}
+
+func TestUploadRejectsBlobDestination(t *testing.T) {
+	dir := t.TempDir()
+	server := NewServer(dir)
+	body := []byte("wasm")
+
+	req := httptest.NewRequest(http.MethodPut, "/blob/manual.wasm", bytes.NewReader(mustGzip(t, body)))
+	req.Header.Set(headerBlobSHA256, sha256Hex(body))
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("upload status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestBlobPathServesDirectly(t *testing.T) {
+	dir := t.TempDir()
+	server := NewServer(dir)
+	body := []byte("wasm")
+	sha := sha256Hex(body)
+
+	req := httptest.NewRequest(http.MethodPut, "/foo.wasm", bytes.NewReader(mustGzip(t, body)))
+	req.Header.Set(headerBlobSHA256, sha)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("upload status = %d, want %d", rec.Code, http.StatusCreated)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, blobRemotePath(sha, true), nil)
+	rec = httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("blob download status = %d, want %d", rec.Code, http.StatusOK)
 	}
 }
 
@@ -227,20 +227,18 @@ func TestUploadClientSendsCompressedBlobWhenMissing(t *testing.T) {
 	}
 }
 
-func TestBackupSkipsOriginalBlobAndRestoreRebuildsIt(t *testing.T) {
+func TestBackupAndRestorePreservesData(t *testing.T) {
 	dir := t.TempDir()
 	body := []byte("wasm")
 	sha := sha256Hex(body)
 	if err := os.MkdirAll(filepath.Join(dir, "blob"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "blob", sha+".wasm"), body, 0o644); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(filepath.Join(dir, "blob", sha+".wasm.gz"), mustGzip(t, body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(filepath.Join("blob", sha+".wasm"), filepath.Join(dir, "foo.wasm")); err != nil {
+	mapping := map[string]string{"/foo.wasm": sha}
+	if err := saveMapping(dir, mapping); err != nil {
 		t.Fatal(err)
 	}
 
@@ -248,30 +246,20 @@ func TestBackupSkipsOriginalBlobAndRestoreRebuildsIt(t *testing.T) {
 	if err := backupData(dir, tarball); err != nil {
 		t.Fatal(err)
 	}
-	names := tarNames(t, tarball)
-	if contains(names, "blob/"+sha+".wasm") {
-		t.Fatalf("backup included original wasm blob: %v", names)
-	}
-	if !contains(names, "blob/"+sha+".wasm.gz") {
-		t.Fatalf("backup missing gzip blob: %v", names)
-	}
-	if !contains(names, "foo.wasm") {
-		t.Fatalf("backup missing symlink path: %v", names)
-	}
 
 	restoreDir := t.TempDir()
 	if err := restoreData(restoreDir, tarball); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := os.ReadFile(filepath.Join(restoreDir, "blob", sha+".wasm")); err != nil || !bytes.Equal(got, body) {
-		t.Fatalf("restored wasm = %q, %v; want %q, nil", got, err, body)
+	if got, err := os.ReadFile(filepath.Join(restoreDir, "blob", sha+".wasm.gz")); err != nil || !bytes.Equal(got, mustGzip(t, body)) {
+		t.Fatalf("restored blob = %v, %v", got, err)
 	}
-	link, err := os.Readlink(filepath.Join(restoreDir, "foo.wasm"))
+	restoredMapping, err := loadMapping(restoreDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if link != filepath.Join("blob", sha+".wasm") {
-		t.Fatalf("restored link = %q, want blob link", link)
+	if restoredMapping["/foo.wasm"] != sha {
+		t.Fatalf("restored mapping = %v, want /foo.wasm -> %s", restoredMapping, sha)
 	}
 }
 
@@ -281,14 +269,16 @@ func TestSafeTarPathRejectsTraversal(t *testing.T) {
 	}
 }
 
-func TestValidateSymlinkTargetRejectsEscape(t *testing.T) {
+func TestNotFoundReturns404(t *testing.T) {
 	dir := t.TempDir()
-	linkPath := filepath.Join(dir, "a", "b", "foo.wasm")
-	if err := validateSymlinkTarget(dir, linkPath, "../../blob/hash.wasm"); err != nil {
-		t.Fatalf("validateSymlinkTarget rejected in-tree target: %v", err)
-	}
-	if err := validateSymlinkTarget(dir, linkPath, "../../../outside"); err == nil {
-		t.Fatal("validateSymlinkTarget accepted escaping target")
+	server := NewServer(dir)
+
+	req := httptest.NewRequest(http.MethodGet, "/nonexistent.wasm", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 
@@ -317,37 +307,6 @@ func mustGunzip(t *testing.T, body []byte) []byte {
 func sha256Hex(body []byte) string {
 	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:])
-}
-
-func tarNames(t *testing.T, tarball string) []string {
-	t.Helper()
-	file, err := os.Open(tarball)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer file.Close()
-
-	var names []string
-	tr := tar.NewReader(file)
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			return names
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		names = append(names, hdr.Name)
-	}
-}
-
-func contains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
