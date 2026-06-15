@@ -71,11 +71,11 @@ func handleList(w http.ResponseWriter, store BlobStore, dataDir string) {
 	}
 
 	type item struct {
-		Path   string `json:"path"`
-		Hash   string `json:"hash"`
-		Time   string `json:"time"`
-		Size   string `json:"size"`
-		epoch  int64
+		Path  string `json:"path"`
+		Hash  string `json:"hash"`
+		Time  string `json:"time"`
+		Size  string `json:"size"`
+		epoch int64
 	}
 	items := make([]item, 0, len(entries))
 	for p, e := range entries {

@@ -225,10 +225,10 @@ func TestRootListsEntriesSortedByTime(t *testing.T) {
 	}
 
 	var items []struct {
-		Path   string  `json:"path"`
-		Hash   string  `json:"hash"`
-		Time   string  `json:"time"`
-		Size   string  `json:"size"`
+		Path string `json:"path"`
+		Hash string `json:"hash"`
+		Time string `json:"time"`
+		Size string `json:"size"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&items); err != nil {
 		t.Fatalf("decode listing: %v", err)
@@ -561,10 +561,10 @@ func TestNotFoundReturns404(t *testing.T) {
 
 func TestParseGoWasmPath(t *testing.T) {
 	tests := []struct {
-		remotePath      string
-		wantImportPath  string
-		wantVersion     string
-		wantOK          bool
+		remotePath     string
+		wantImportPath string
+		wantVersion    string
+		wantOK         bool
 	}{
 		{"/go/github.com/btwiuse/w9y/cmd/w9y@v0.1.0", "github.com/btwiuse/w9y/cmd/w9y", "v0.1.0", true},
 		{"/go/github.com/btwiuse/w9y/cmd/w9y@latest", "github.com/btwiuse/w9y/cmd/w9y", "latest", true},

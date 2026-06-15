@@ -48,10 +48,10 @@ func backupRemote(client *http.Client, host, destDir string) error {
 	defer resp.Body.Close()
 
 	var items []struct {
-		Path   string `json:"path"`
-		Hash   string `json:"hash"`
-		Time   string `json:"time"`
-		Size   string `json:"size"`
+		Path string `json:"path"`
+		Hash string `json:"hash"`
+		Time string `json:"time"`
+		Size string `json:"size"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
 		return err
