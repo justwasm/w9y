@@ -34,12 +34,12 @@ func TestUploadStoresBlobAndMappingEntry(t *testing.T) {
 		t.Fatalf("expected gzip blob: %v", err)
 	}
 
-	m, err := loadMapping(dir)
+	store := NewBlobStore(dir)
+	e, err := store.Get("/foo.wasm")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("store.Get: %v", err)
 	}
-	e, ok := m.Entries["/foo.wasm"]
-	if !ok || e.Hash != sha {
+	if e.Hash != sha {
 		t.Fatalf("mapping /foo.wasm = %+v, want sha=%s", e, sha)
 	}
 
@@ -88,15 +88,20 @@ func TestLinkOnlyViaQueryParam(t *testing.T) {
 		t.Fatalf("link /two.wasm status = %d, want %d: %s", rec.Code, http.StatusCreated, rec.Body.String())
 	}
 
-	m, err := loadMapping(dir)
+	store := NewBlobStore(dir)
+	e, err := store.Get("/one.wasm")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("store.Get /one.wasm: %v", err)
 	}
-	if m.Entries["/one.wasm"].Hash != sha {
-		t.Fatalf("mapping /one.wasm sha = %q, want %q", m.Entries["/one.wasm"].Hash, sha)
+	if e.Hash != sha {
+		t.Fatalf("mapping /one.wasm sha = %q, want %q", e.Hash, sha)
 	}
-	if m.Entries["/two.wasm"].Hash != sha {
-		t.Fatalf("mapping /two.wasm sha = %q, want %q", m.Entries["/two.wasm"].Hash, sha)
+	e, err = store.Get("/two.wasm")
+	if err != nil {
+		t.Fatalf("store.Get /two.wasm: %v", err)
+	}
+	if e.Hash != sha {
+		t.Fatalf("mapping /two.wasm sha = %q, want %q", e.Hash, sha)
 	}
 
 	// Both paths should serve the same content
@@ -175,11 +180,11 @@ func TestRootListsEntriesSortedByTime(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := &mapping{Entries: map[string]Blob{
-		"/a.wasm": {Hash: "a", Time: 100},
-		"/b.wasm": {Hash: "b", Time: 200},
-	}}
-	if err := saveMapping(dir, m); err != nil {
+	store := NewBlobStore(dir)
+	if err := store.Set("/a.wasm", Blob{Hash: "a", Time: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set("/b.wasm", Blob{Hash: "b", Time: 200}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -327,12 +332,13 @@ func TestBackupRemoteDownloadsEntriesAndBlobs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m, err := loadMapping(destDir)
+	store := NewBlobStore(destDir)
+	entries, err := store.List()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(m.Entries) != 2 {
-		t.Fatalf("expected 2 entries, got %d", len(m.Entries))
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
 	}
 
 	blob, err := os.ReadFile(filepath.Join(destDir, "blob", sha+".wasm.gz"))
@@ -356,11 +362,11 @@ func TestRestoreRemoteUploadsEntriesAndBlobs(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(backupDir, "blob", sha+".wasm.gz"), gz, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m := &mapping{Entries: map[string]Blob{
-		"/foo.wasm": {Hash: sha, Time: 100},
-		"/bar.wasm": {Hash: sha, Time: 200},
-	}}
-	if err := saveMapping(backupDir, m); err != nil {
+	store := NewBlobStore(backupDir)
+	if err := store.Set("/foo.wasm", Blob{Hash: sha, Time: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set("/bar.wasm", Blob{Hash: sha, Time: 200}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -426,12 +432,13 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	restored, err := loadMapping(serverDir2)
+	store := NewBlobStore(serverDir2)
+	restored, err := store.Get("/foo.wasm")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restored.Entries["/foo.wasm"].Hash != sha {
-		t.Fatalf("restored mapping = %+v", restored.Entries)
+	if restored.Hash != sha {
+		t.Fatalf("restored mapping = %+v", restored)
 	}
 	if _, err := os.Stat(filepath.Join(serverDir2, "blob", sha+".wasm.gz")); err != nil {
 		t.Fatalf("missing blob: %v", err)
@@ -490,8 +497,8 @@ func TestGCLeavesReferencedBlobs(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "blob", sha+".wasm.gz"), []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m := &mapping{Entries: map[string]Blob{"/foo.wasm": {Hash: sha, Time: 100}}}
-	if err := saveMapping(dir, m); err != nil {
+	store := NewBlobStore(dir)
+	if err := store.Set("/foo.wasm", Blob{Hash: sha, Time: 100}); err != nil {
 		t.Fatal(err)
 	}
 

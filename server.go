@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 
 // NewServer returns the w9y HTTP handler.
 func NewServer(dataDir string) http.Handler {
+	store := NewBlobStore(dataDir)
 	return withCORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -31,21 +33,21 @@ func NewServer(dataDir string) http.Handler {
 		}
 
 		if remotePath == "/" {
-			handleList(w, dataDir)
+			handleList(w, store, dataDir)
 			return
 		}
 
 		// Go WASM: build-on-demand from import path
 		if isGoWasmPath(remotePath) {
-			handleGoWasm(w, r, dataDir, remotePath)
+			handleGoWasm(w, r, store, dataDir, remotePath)
 			return
 		}
 
 		switch r.Method {
 		case http.MethodPut, http.MethodPost:
-			handleUpload(w, r, dataDir, remotePath)
+			handleUpload(w, r, store, dataDir, remotePath)
 		case http.MethodGet, http.MethodHead:
-			handleDownload(w, r, dataDir, remotePath)
+			handleDownload(w, r, store, dataDir, remotePath)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -61,8 +63,8 @@ func withCORS(next http.Handler) http.Handler {
 	})
 }
 
-func handleList(w http.ResponseWriter, dataDir string) {
-	m, err := loadMapping(dataDir)
+func handleList(w http.ResponseWriter, store BlobStore, dataDir string) {
+	entries, err := store.List()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -75,8 +77,8 @@ func handleList(w http.ResponseWriter, dataDir string) {
 		Size   string `json:"size"`
 		epoch  int64
 	}
-	items := make([]item, 0, len(m.Entries))
-	for p, e := range m.Entries {
+	items := make([]item, 0, len(entries))
+	for p, e := range entries {
 		t := time.UnixMilli(e.Time).UTC().Format(time.RFC3339Nano)
 		fi, err := os.Stat(blobPath(dataDir, e.Hash, true))
 		var s string
@@ -96,7 +98,7 @@ func handleList(w http.ResponseWriter, dataDir string) {
 	w.Write(enc)
 }
 
-func handleUpload(w http.ResponseWriter, r *http.Request, dataDir, remotePath string) {
+func handleUpload(w http.ResponseWriter, r *http.Request, store BlobStore, dataDir, remotePath string) {
 	if isBlobRemotePath(remotePath) {
 		http.Error(w, "uploads to /blob are not allowed", http.StatusBadRequest)
 		return
@@ -186,10 +188,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request, dataDir, remotePath st
 		}
 	}
 
-	if err := updateMapping(dataDir, func(m *mapping) error {
-		m.Entries[remotePath] = Blob{Hash: sha, Time: time.Now().UnixMilli()}
-		return nil
-	}); err != nil {
+	if err := store.Set(remotePath, Blob{Hash: sha, Time: time.Now().UnixMilli()}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -203,7 +202,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request, dataDir, remotePath st
 	fmt.Fprintf(w, "%s %s -> blob/%s.wasm.gz", verb, remotePath, sha)
 }
 
-func handleDownload(w http.ResponseWriter, r *http.Request, dataDir, remotePath string) {
+func handleDownload(w http.ResponseWriter, r *http.Request, store BlobStore, dataDir, remotePath string) {
 	// blob path serves the gzip file as-is (raw bytes, no Content-Encoding)
 	if isBlobRemotePath(remotePath) {
 		gzPath := storagePath(dataDir, remotePath)
@@ -211,14 +210,13 @@ func handleDownload(w http.ResponseWriter, r *http.Request, dataDir, remotePath 
 		return
 	}
 
-	m, err := loadMapping(dataDir)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	e, err := store.Get(remotePath)
+	if errors.Is(err, ErrPathNotFound) {
+		http.NotFound(w, r)
 		return
 	}
-	e, ok := m.Entries[remotePath]
-	if !ok {
-		http.NotFound(w, r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	gzPath := blobPath(dataDir, e.Hash, true)

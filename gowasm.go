@@ -60,7 +60,7 @@ func parseGoWasmPath(remotePath string) (goWasmPath, bool) {
 	return goWasmPath{ImportPath: importPath, Version: version}, true
 }
 
-func handleGoWasm(w http.ResponseWriter, r *http.Request, dataDir, remotePath string) {
+func handleGoWasm(w http.ResponseWriter, r *http.Request, store BlobStore, dataDir, remotePath string) {
 	gwp, ok := parseGoWasmPath(remotePath)
 	if !ok {
 		http.NotFound(w, r)
@@ -96,7 +96,7 @@ func handleGoWasm(w http.ResponseWriter, r *http.Request, dataDir, remotePath st
 	}
 
 	// Concrete version — build or wait, then serve
-	sha, err := buildOrWait(dataDir, gwp.ImportPath, gwp.Version, remotePath, r.Context())
+	sha, err := buildOrWait(store, dataDir, gwp.ImportPath, gwp.Version, remotePath, r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -211,13 +211,9 @@ var (
 
 // buildOrWait checks the cache first. If already built, returns immediately.
 // Otherwise, it either becomes the builder or waits for the in-flight build.
-func buildOrWait(dataDir, importPath, version, remotePath string, reqCtx context.Context) (string, error) {
+func buildOrWait(store BlobStore, dataDir, importPath, version, remotePath string, reqCtx context.Context) (string, error) {
 	// Fast path: check mapping before taking any locks
-	m, err := loadMapping(dataDir)
-	if err != nil {
-		return "", err
-	}
-	if e, ok := m.Entries[remotePath]; ok {
+	if e, err := store.Get(remotePath); err == nil {
 		return e.Hash, nil
 	}
 
@@ -238,7 +234,7 @@ func buildOrWait(dataDir, importPath, version, remotePath string, reqCtx context
 	buildsMu.Unlock()
 
 	// Do the build
-	sha, err := doBuildGoWasm(reqCtx, dataDir, importPath, version, remotePath)
+	sha, err := doBuildGoWasm(store, reqCtx, dataDir, importPath, version, remotePath)
 
 	// Collect all waiters and signal them
 	buildsMu.Lock()
@@ -256,7 +252,7 @@ func buildOrWait(dataDir, importPath, version, remotePath string, reqCtx context
 // doBuildGoWasm runs the actual Go build, stores the result, and returns the SHA.
 // Uses go install with an isolated temp GOPATH, since go build pkg@version
 // is not supported — only go install and go get accept the @version syntax.
-func doBuildGoWasm(reqCtx context.Context, dataDir, importPath, version, remotePath string) (string, error) {
+func doBuildGoWasm(store BlobStore, reqCtx context.Context, dataDir, importPath, version, remotePath string) (string, error) {
 	ctx, cancel := context.WithTimeout(reqCtx, 5*time.Minute)
 	defer cancel()
 
@@ -348,10 +344,7 @@ func doBuildGoWasm(reqCtx context.Context, dataDir, importPath, version, remoteP
 	}
 
 	// Update mapping
-	if err := updateMapping(dataDir, func(m *mapping) error {
-		m.Entries[remotePath] = Blob{Hash: sha, Time: time.Now().UnixMilli()}
-		return nil
-	}); err != nil {
+	if err := store.Set(remotePath, Blob{Hash: sha, Time: time.Now().UnixMilli()}); err != nil {
 		return "", err
 	}
 

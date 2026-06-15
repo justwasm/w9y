@@ -59,17 +59,15 @@ func backupRemote(client *http.Client, host, destDir string) error {
 
 	// Merge: load existing local mapping, overlay remote entries
 	slog.Info("fetched entries from remote", "count", len(items))
-	if err := updateMapping(destDir, func(m *mapping) error {
-		for _, item := range items {
-			t, parseErr := time.Parse(time.RFC3339Nano, item.Time)
-			if parseErr != nil {
-				return fmt.Errorf("parse time %q: %v", item.Time, parseErr)
-			}
-			m.Entries[item.Path] = Blob{Hash: item.Hash, Time: t.UnixMilli()}
+	store := NewBlobStore(destDir)
+	for _, item := range items {
+		t, parseErr := time.Parse(time.RFC3339Nano, item.Time)
+		if parseErr != nil {
+			return fmt.Errorf("parse time %q: %v", item.Time, parseErr)
 		}
-		return nil
-	}); err != nil {
-		return err
+		if err := store.Set(item.Path, Blob{Hash: item.Hash, Time: t.UnixMilli()}); err != nil {
+			return err
+		}
 	}
 
 	blobClient := client

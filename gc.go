@@ -29,18 +29,19 @@ flags:
 }
 
 func gcData(dataDir string, clean bool) error {
-	m, err := loadMapping(dataDir)
+	store := NewBlobStore(dataDir)
+	entries, err := store.List()
 	if err != nil {
 		return err
 	}
 
-	referenced := make(map[string]bool, len(m.Entries))
-	for _, e := range m.Entries {
+	referenced := make(map[string]bool, len(entries))
+	for _, e := range entries {
 		referenced[e.Hash] = true
 	}
 
 	blobDir := filepath.Join(dataDir, "blob")
-	entries, err := os.ReadDir(blobDir)
+	dirEntries, err := os.ReadDir(blobDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -48,7 +49,7 @@ func gcData(dataDir string, clean bool) error {
 		return err
 	}
 
-	for _, de := range entries {
+	for _, de := range dirEntries {
 		if de.IsDir() {
 			continue
 		}

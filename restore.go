@@ -34,19 +34,20 @@ flags:
 }
 
 func restoreRemote(client *http.Client, host, backupDir string) error {
-	m, err := loadMapping(backupDir)
+	store := NewBlobStore(backupDir)
+	entries, err := store.List()
 	if err != nil {
 		return err
 	}
 
-	slog.Info("restoring entries", "count", len(m.Entries), "dir", backupDir)
+	slog.Info("restoring entries", "count", len(entries), "dir", backupDir)
 
 	type blobEntry struct {
 		path string
 		time int64
 	}
-	shaToEntries := make(map[string][]blobEntry, len(m.Entries))
-	for p, e := range m.Entries {
+	shaToEntries := make(map[string][]blobEntry, len(entries))
+	for p, e := range entries {
 		shaToEntries[e.Hash] = append(shaToEntries[e.Hash], blobEntry{p, e.Time})
 	}
 

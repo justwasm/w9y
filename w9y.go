@@ -26,14 +26,104 @@ const defaultDataDir = "data"
 
 var defaultHost = cmp.Or(os.Getenv("W9Y"), "https://w9y.up.railway.app/")
 
+var ErrPathNotFound = errors.New("path not found")
+
 type Blob struct {
 	Hash string `yaml:"hash" json:"hash"`
 	Size int64  `yaml:"size" json:"size"`
 	Time int64  `yaml:"time" json:"time"`
 }
 
-type mapping struct {
-	Entries map[string]Blob `yaml:"entries"`
+// BlobStore provides concurrent-safe access to the path→blob mapping.
+type BlobStore interface {
+	Get(path string) (Blob, error)
+	Set(path string, blob Blob) error
+	List() (map[string]Blob, error)
+}
+
+// NewBlobStore returns a file-based BlobStore backed by mapping.yaml in dataDir.
+func NewBlobStore(dataDir string) BlobStore {
+	return &fileBlobStore{dataDir: dataDir}
+}
+
+type fileBlobStore struct {
+	dataDir string
+	mu      sync.RWMutex
+}
+
+func (s *fileBlobStore) Get(path string) (Blob, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	entries, err := s.load()
+	if err != nil {
+		return Blob{}, err
+	}
+	b, ok := entries[path]
+	if !ok {
+		return Blob{}, ErrPathNotFound
+	}
+	return b, nil
+}
+
+func (s *fileBlobStore) Set(path string, blob Blob) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := s.load()
+	if err != nil {
+		return err
+	}
+	entries[path] = blob
+	return s.save(entries)
+}
+
+func (s *fileBlobStore) List() (map[string]Blob, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	entries, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]Blob, len(entries))
+	for k, v := range entries {
+		result[k] = v
+	}
+	return result, nil
+}
+
+func (s *fileBlobStore) load() (map[string]Blob, error) {
+	mappingPath := filepath.Join(s.dataDir, "mapping.yaml")
+	data, err := os.ReadFile(mappingPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return make(map[string]Blob), nil
+		}
+		return nil, err
+	}
+	var m struct {
+		Entries map[string]Blob `yaml:"entries"`
+	}
+	if err := yaml.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	if m.Entries == nil {
+		m.Entries = make(map[string]Blob)
+	}
+	return m.Entries, nil
+}
+
+func (s *fileBlobStore) save(entries map[string]Blob) error {
+	mappingPath := filepath.Join(s.dataDir, "mapping.yaml")
+	if err := os.MkdirAll(s.dataDir, 0o755); err != nil {
+		return err
+	}
+	m := struct {
+		Entries map[string]Blob `yaml:"entries"`
+	}{Entries: entries}
+	data, err := yaml.Marshal(m)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(mappingPath, data, 0o644)
 }
 
 // Run starts server mode when the "server" subcommand is used,
@@ -144,37 +234,6 @@ func remoteFileExists(client *http.Client, host, remotePath string) (bool, error
 	}
 }
 
-func loadMapping(dataDir string) (*mapping, error) {
-	mappingPath := filepath.Join(dataDir, "mapping.yaml")
-	data, err := os.ReadFile(mappingPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return &mapping{Entries: make(map[string]Blob)}, nil
-		}
-		return nil, err
-	}
-	var m mapping
-	if err := yaml.Unmarshal(data, &m); err != nil {
-		return nil, err
-	}
-	if m.Entries == nil {
-		m.Entries = make(map[string]Blob)
-	}
-	return &m, nil
-}
-
-func saveMapping(dataDir string, m *mapping) error {
-	mappingPath := filepath.Join(dataDir, "mapping.yaml")
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		return err
-	}
-	data, err := yaml.Marshal(m)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(mappingPath, data, 0o644)
-}
-
 func gzipBytes(src []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
@@ -239,22 +298,6 @@ func contentType(remotePath string) string {
 		return typ
 	}
 	return "application/octet-stream"
-}
-
-var mappingMu sync.Mutex
-
-// updateMapping atomically loads, modifies, and saves the mapping.
-func updateMapping(dataDir string, fn func(*mapping) error) error {
-	mappingMu.Lock()
-	defer mappingMu.Unlock()
-	m, err := loadMapping(dataDir)
-	if err != nil {
-		return err
-	}
-	if err := fn(m); err != nil {
-		return err
-	}
-	return saveMapping(dataDir, m)
 }
 
 func getenv(key, fallback string) string {
