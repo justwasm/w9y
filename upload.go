@@ -56,6 +56,9 @@ func uploadWithClient(args []string, client *http.Client) error {
 		if err != nil {
 			return err
 		}
+		beforeMB := float64(len(wasm)) / (1024 * 1024)
+		afterMB := float64(len(gz)) / (1024 * 1024)
+		fmt.Fprintf(os.Stderr, "compressing %s, %.2f MB -> %.2f MB\n", fileName, beforeMB, afterMB)
 		body = bytes.NewReader(gz)
 	}
 
