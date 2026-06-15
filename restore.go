@@ -46,6 +46,8 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 		return err
 	}
 
+	fmt.Fprintf(os.Stderr, "restoring %d entries from %s\n", len(m.Entries), backupDir)
+
 	type blobEntry struct {
 		path string
 		time int64
@@ -55,6 +57,7 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 		shaToEntries[e.SHA] = append(shaToEntries[e.SHA], blobEntry{p, e.Time})
 	}
 
+	var uploaded, linked int
 	for sha, entries := range shaToEntries {
 		gzPath := blobPath(backupDir, sha, true)
 		gzData, err := os.ReadFile(gzPath)
@@ -82,7 +85,7 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 
 			req, err := http.NewRequest(http.MethodPut, u.String(), body)
 			if err != nil {
-				return err
+				return fmt.Errorf("restore %s: %v", be.path, err)
 			}
 			req.Header.Set("Content-Type", "application/gzip")
 			req.Header.Set("Content-Encoding", "gzip")
@@ -97,9 +100,20 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 				return fmt.Errorf("restore %s: %s: %s", be.path, resp.Status, strings.TrimSpace(string(bodyBytes)))
 			}
 
+			verb := "linked"
+			if !exists {
+				verb = "uploaded"
+			}
+			fmt.Fprintf(os.Stderr, "  %s %s -> blob/%s.wasm.gz\n", verb, be.path, sha)
+			if exists {
+				linked++
+			} else {
+				uploaded++
+			}
 			exists = true
 		}
 	}
 
+	fmt.Fprintf(os.Stderr, "restore complete: %d uploaded, %d linked\n", uploaded, linked)
 	return nil
 }
