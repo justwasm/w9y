@@ -218,7 +218,7 @@ func buildOrWait(dataDir, importPath, version, remotePath string, reqCtx context
 		return "", err
 	}
 	if e, ok := m.Entries[remotePath]; ok {
-		return e.SHA, nil
+		return e.Hash, nil
 	}
 
 	ch := make(chan buildResult, 1)
@@ -348,12 +348,10 @@ func doBuildGoWasm(reqCtx context.Context, dataDir, importPath, version, remoteP
 	}
 
 	// Update mapping
-	m, err := loadMapping(dataDir)
-	if err != nil {
-		return "", err
-	}
-	m.Entries[remotePath] = entry{SHA: sha, Time: time.Now().UnixMilli()}
-	if err := saveMapping(dataDir, m); err != nil {
+	if err := updateMapping(dataDir, func(m *mapping) error {
+		m.Entries[remotePath] = Blob{Hash: sha, Time: time.Now().UnixMilli()}
+		return nil
+	}); err != nil {
 		return "", err
 	}
 

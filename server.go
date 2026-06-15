@@ -70,7 +70,7 @@ func handleList(w http.ResponseWriter, dataDir string) {
 
 	type item struct {
 		Path   string `json:"path"`
-		SHA256 string `json:"sha256"`
+		Hash   string `json:"hash"`
 		Time   string `json:"time"`
 		Size   string `json:"size"`
 		epoch  int64
@@ -78,14 +78,14 @@ func handleList(w http.ResponseWriter, dataDir string) {
 	items := make([]item, 0, len(m.Entries))
 	for p, e := range m.Entries {
 		t := time.UnixMilli(e.Time).UTC().Format(time.RFC3339Nano)
-		fi, err := os.Stat(blobPath(dataDir, e.SHA, true))
+		fi, err := os.Stat(blobPath(dataDir, e.Hash, true))
 		var s string
 		if err == nil {
 			s = fmt.Sprintf("%.2fMB", float64(fi.Size())/(1024*1024))
 		} else {
 			s = "0.00MB"
 		}
-		items = append(items, item{Path: p, SHA256: e.SHA, Time: t, Size: s, epoch: e.Time})
+		items = append(items, item{Path: p, Hash: e.Hash, Time: t, Size: s, epoch: e.Time})
 	}
 	sort.Slice(items, func(i, j int) bool {
 		return items[i].epoch > items[j].epoch
@@ -104,7 +104,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request, dataDir, remotePath st
 
 	var sha string
 	linked := false
-	if s := r.URL.Query().Get("sha256"); s != "" {
+	if s := r.URL.Query().Get("hash"); s != "" {
 		sha = s
 		gzPath := blobPath(dataDir, sha, true)
 		if _, err := os.Stat(gzPath); os.IsNotExist(err) {
@@ -186,13 +186,10 @@ func handleUpload(w http.ResponseWriter, r *http.Request, dataDir, remotePath st
 		}
 	}
 
-	m, err := loadMapping(dataDir)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	m.Entries[remotePath] = entry{SHA: sha, Time: time.Now().UnixMilli()}
-	if err := saveMapping(dataDir, m); err != nil {
+	if err := updateMapping(dataDir, func(m *mapping) error {
+		m.Entries[remotePath] = Blob{Hash: sha, Time: time.Now().UnixMilli()}
+		return nil
+	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -224,7 +221,7 @@ func handleDownload(w http.ResponseWriter, r *http.Request, dataDir, remotePath 
 		http.NotFound(w, r)
 		return
 	}
-	gzPath := blobPath(dataDir, e.SHA, true)
+	gzPath := blobPath(dataDir, e.Hash, true)
 	serveGzipFile(w, r, gzPath)
 }
 

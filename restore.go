@@ -47,7 +47,7 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 	}
 	shaToEntries := make(map[string][]blobEntry, len(m.Entries))
 	for p, e := range m.Entries {
-		shaToEntries[e.SHA] = append(shaToEntries[e.SHA], blobEntry{p, e.Time})
+		shaToEntries[e.Hash] = append(shaToEntries[e.Hash], blobEntry{p, e.Time})
 	}
 
 	var uploaded, linked int
@@ -73,7 +73,7 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 		for _, be := range entries {
 			u, _ := url.Parse(host)
 			u.Path, _ = url.JoinPath(u.Path, be.path)
-			u.RawQuery = "sha256=" + sha
+			u.RawQuery = "hash=" + sha
 
 			var body io.Reader
 			if exists {

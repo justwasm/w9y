@@ -39,7 +39,7 @@ func TestUploadStoresBlobAndMappingEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	e, ok := m.Entries["/foo.wasm"]
-	if !ok || e.SHA != sha {
+	if !ok || e.Hash != sha {
 		t.Fatalf("mapping /foo.wasm = %+v, want sha=%s", e, sha)
 	}
 
@@ -81,7 +81,7 @@ func TestLinkOnlyViaQueryParam(t *testing.T) {
 	}
 
 	// Second upload: link-only via query param, no body
-	req = httptest.NewRequest(http.MethodPut, "/two.wasm?sha256="+sha, http.NoBody)
+	req = httptest.NewRequest(http.MethodPut, "/two.wasm?hash="+sha, http.NoBody)
 	rec = httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -92,11 +92,11 @@ func TestLinkOnlyViaQueryParam(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Entries["/one.wasm"].SHA != sha {
-		t.Fatalf("mapping /one.wasm sha = %q, want %q", m.Entries["/one.wasm"].SHA, sha)
+	if m.Entries["/one.wasm"].Hash != sha {
+		t.Fatalf("mapping /one.wasm sha = %q, want %q", m.Entries["/one.wasm"].Hash, sha)
 	}
-	if m.Entries["/two.wasm"].SHA != sha {
-		t.Fatalf("mapping /two.wasm sha = %q, want %q", m.Entries["/two.wasm"].SHA, sha)
+	if m.Entries["/two.wasm"].Hash != sha {
+		t.Fatalf("mapping /two.wasm sha = %q, want %q", m.Entries["/two.wasm"].Hash, sha)
 	}
 
 	// Both paths should serve the same content
@@ -117,7 +117,7 @@ func TestLinkOnlyRejectsMissingBlob(t *testing.T) {
 	dir := t.TempDir()
 	server := NewServer(dir)
 
-	req := httptest.NewRequest(http.MethodPut, "/foo.wasm?sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", http.NoBody)
+	req := httptest.NewRequest(http.MethodPut, "/foo.wasm?hash=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", http.NoBody)
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -175,9 +175,9 @@ func TestRootListsEntriesSortedByTime(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := &mapping{Entries: map[string]entry{
-		"/a.wasm": {SHA: "a", Time: 100},
-		"/b.wasm": {SHA: "b", Time: 200},
+	m := &mapping{Entries: map[string]Blob{
+		"/a.wasm": {Hash: "a", Time: 100},
+		"/b.wasm": {Hash: "b", Time: 200},
 	}}
 	if err := saveMapping(dir, m); err != nil {
 		t.Fatal(err)
@@ -197,7 +197,7 @@ func TestRootListsEntriesSortedByTime(t *testing.T) {
 
 	var items []struct {
 		Path   string  `json:"path"`
-		SHA256 string  `json:"sha256"`
+		Hash   string  `json:"hash"`
 		Time   string  `json:"time"`
 		Size   string  `json:"size"`
 	}
@@ -256,8 +256,8 @@ func TestClientUploadWithPrecheck(t *testing.T) {
 	if requests[0].method != "HEAD" || requests[0].path != blobRemotePath(sha, true) {
 		t.Fatalf("request 0 = %s %s, want HEAD %s", requests[0].method, requests[0].path, blobRemotePath(sha, true))
 	}
-	if requests[1].method != "PUT" || requests[1].path != "/bar.wasm" || requests[1].query != "sha256="+sha {
-		t.Fatalf("request 1 = %s %s?%s, want PUT /bar.wasm?sha256=%s", requests[1].method, requests[1].path, requests[1].query, sha)
+	if requests[1].method != "PUT" || requests[1].path != "/bar.wasm" || requests[1].query != "hash="+sha {
+		t.Fatalf("request 1 = %s %s?%s, want PUT /bar.wasm?hash=%s", requests[1].method, requests[1].path, requests[1].query, sha)
 	}
 }
 
@@ -294,8 +294,8 @@ func TestClientUploadSendsBodyWhenBlobMissing(t *testing.T) {
 	if requests[0].method != "HEAD" || requests[0].path != blobRemotePath(sha, true) {
 		t.Fatalf("request 0 = %s %s, want HEAD %s", requests[0].method, requests[0].path, blobRemotePath(sha, true))
 	}
-	if requests[1].method != "PUT" || requests[1].path != "/foo.wasm" || requests[1].query != "sha256="+sha {
-		t.Fatalf("request 1 = %s %s?%s, want PUT /foo.wasm?sha256=%s", requests[1].method, requests[1].path, requests[1].query, sha)
+	if requests[1].method != "PUT" || requests[1].path != "/foo.wasm" || requests[1].query != "hash="+sha {
+		t.Fatalf("request 1 = %s %s?%s, want PUT /foo.wasm?hash=%s", requests[1].method, requests[1].path, requests[1].query, sha)
 	}
 	if !bytes.Equal(uploaded, gz) {
 		t.Fatal("uploaded body does not match gzipped content")
@@ -356,9 +356,9 @@ func TestRestoreRemoteUploadsEntriesAndBlobs(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(backupDir, "blob", sha+".wasm.gz"), gz, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m := &mapping{Entries: map[string]entry{
-		"/foo.wasm": {SHA: sha, Time: 100},
-		"/bar.wasm": {SHA: sha, Time: 200},
+	m := &mapping{Entries: map[string]Blob{
+		"/foo.wasm": {Hash: sha, Time: 100},
+		"/bar.wasm": {Hash: sha, Time: 200},
 	}}
 	if err := saveMapping(backupDir, m); err != nil {
 		t.Fatal(err)
@@ -430,7 +430,7 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restored.Entries["/foo.wasm"].SHA != sha {
+	if restored.Entries["/foo.wasm"].Hash != sha {
 		t.Fatalf("restored mapping = %+v", restored.Entries)
 	}
 	if _, err := os.Stat(filepath.Join(serverDir2, "blob", sha+".wasm.gz")); err != nil {
@@ -490,7 +490,7 @@ func TestGCLeavesReferencedBlobs(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "blob", sha+".wasm.gz"), []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m := &mapping{Entries: map[string]entry{"/foo.wasm": {SHA: sha, Time: 100}}}
+	m := &mapping{Entries: map[string]Blob{"/foo.wasm": {Hash: sha, Time: 100}}}
 	if err := saveMapping(dir, m); err != nil {
 		t.Fatal(err)
 	}

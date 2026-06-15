@@ -17,6 +17,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -25,13 +26,14 @@ const defaultDataDir = "data"
 
 var defaultHost = cmp.Or(os.Getenv("W9Y"), "https://w9y.up.railway.app/")
 
-type entry struct {
-	SHA  string `yaml:"sha" json:"sha"`
+type Blob struct {
+	Hash string `yaml:"hash" json:"hash"`
+	Size int64  `yaml:"size" json:"size"`
 	Time int64  `yaml:"time" json:"time"`
 }
 
 type mapping struct {
-	Entries map[string]entry `yaml:"entries"`
+	Entries map[string]Blob `yaml:"entries"`
 }
 
 // Run starts server mode when the "server" subcommand is used,
@@ -147,7 +149,7 @@ func loadMapping(dataDir string) (*mapping, error) {
 	data, err := os.ReadFile(mappingPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &mapping{Entries: make(map[string]entry)}, nil
+			return &mapping{Entries: make(map[string]Blob)}, nil
 		}
 		return nil, err
 	}
@@ -156,7 +158,7 @@ func loadMapping(dataDir string) (*mapping, error) {
 		return nil, err
 	}
 	if m.Entries == nil {
-		m.Entries = make(map[string]entry)
+		m.Entries = make(map[string]Blob)
 	}
 	return &m, nil
 }
@@ -237,6 +239,22 @@ func contentType(remotePath string) string {
 		return typ
 	}
 	return "application/octet-stream"
+}
+
+var mappingMu sync.Mutex
+
+// updateMapping atomically loads, modifies, and saves the mapping.
+func updateMapping(dataDir string, fn func(*mapping) error) error {
+	mappingMu.Lock()
+	defer mappingMu.Unlock()
+	m, err := loadMapping(dataDir)
+	if err != nil {
+		return err
+	}
+	if err := fn(m); err != nil {
+		return err
+	}
+	return saveMapping(dataDir, m)
 }
 
 func getenv(key, fallback string) string {

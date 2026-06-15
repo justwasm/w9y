@@ -49,7 +49,7 @@ func backupRemote(client *http.Client, host, destDir string) error {
 
 	var items []struct {
 		Path   string `json:"path"`
-		SHA256 string `json:"sha256"`
+		Hash   string `json:"hash"`
 		Time   string `json:"time"`
 		Size   string `json:"size"`
 	}
@@ -58,19 +58,17 @@ func backupRemote(client *http.Client, host, destDir string) error {
 	}
 
 	// Merge: load existing local mapping, overlay remote entries
-	m, err := loadMapping(destDir)
-	if err != nil {
-		return err
-	}
 	slog.Info("fetched entries from remote", "count", len(items))
-	for _, item := range items {
-		t, parseErr := time.Parse(time.RFC3339Nano, item.Time)
-		if parseErr != nil {
-			return fmt.Errorf("parse time %q: %v", item.Time, parseErr)
+	if err := updateMapping(destDir, func(m *mapping) error {
+		for _, item := range items {
+			t, parseErr := time.Parse(time.RFC3339Nano, item.Time)
+			if parseErr != nil {
+				return fmt.Errorf("parse time %q: %v", item.Time, parseErr)
+			}
+			m.Entries[item.Path] = Blob{Hash: item.Hash, Time: t.UnixMilli()}
 		}
-		m.Entries[item.Path] = entry{SHA: item.SHA256, Time: t.UnixMilli()}
-	}
-	if err := saveMapping(destDir, m); err != nil {
+		return nil
+	}); err != nil {
 		return err
 	}
 
@@ -88,26 +86,26 @@ func backupRemote(client *http.Client, host, destDir string) error {
 	seen := make(map[string]bool, len(items))
 	var downloaded, skipped int
 	for _, item := range items {
-		if seen[item.SHA256] {
+		if seen[item.Hash] {
 			continue
 		}
-		seen[item.SHA256] = true
+		seen[item.Hash] = true
 
-		gzPath := blobPath(destDir, item.SHA256, true)
+		gzPath := blobPath(destDir, item.Hash, true)
 		if _, err := os.Stat(gzPath); err == nil {
 			skipped++
 			continue // already exists locally
 		}
 
 		blobU, _ := url.Parse(host)
-		blobU.Path, _ = url.JoinPath(blobU.Path, blobRemotePath(item.SHA256, true))
+		blobU.Path, _ = url.JoinPath(blobU.Path, blobRemotePath(item.Hash, true))
 		blobResp, err := blobClient.Get(blobU.String())
 		if err != nil {
-			return fmt.Errorf("download blob %s: %v", item.SHA256, err)
+			return fmt.Errorf("download blob %s: %v", item.Hash, err)
 		}
 		if blobResp.StatusCode != http.StatusOK {
 			blobResp.Body.Close()
-			return fmt.Errorf("download blob %s: %s", item.SHA256, blobResp.Status)
+			return fmt.Errorf("download blob %s: %s", item.Hash, blobResp.Status)
 		}
 
 		if err := os.MkdirAll(filepath.Dir(gzPath), 0o755); err != nil {
@@ -124,7 +122,7 @@ func backupRemote(client *http.Client, host, destDir string) error {
 			blobResp.Body.Close()
 			tmp.Close()
 			os.Remove(tmpName)
-			return fmt.Errorf("download blob %s: %v", item.SHA256, copyErr)
+			return fmt.Errorf("download blob %s: %v", item.Hash, copyErr)
 		}
 		blobResp.Body.Close()
 		if err := tmp.Close(); err != nil {
@@ -140,7 +138,7 @@ func backupRemote(client *http.Client, host, destDir string) error {
 		if fi != nil {
 			sizeMB = float64(fi.Size()) / (1024 * 1024)
 		}
-		slog.Info("downloaded blob", "sha", item.SHA256, "size_mb", sizeMB)
+		slog.Info("downloaded blob", "hash", item.Hash, "size_mb", sizeMB)
 		downloaded++
 	}
 

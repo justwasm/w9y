@@ -104,7 +104,7 @@ func verifyBlob(path, wantSHA string) error {
 
 	gotSHA := hex.EncodeToString(h.Sum(nil))
 	if gotSHA != wantSHA {
-		return fmt.Errorf("sha256 mismatch: got %s, want %s", gotSHA, wantSHA)
+		return fmt.Errorf("hash mismatch: got %s, want %s", gotSHA, wantSHA)
 	}
 
 	return nil

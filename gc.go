@@ -36,7 +36,7 @@ func gcData(dataDir string, clean bool) error {
 
 	referenced := make(map[string]bool, len(m.Entries))
 	for _, e := range m.Entries {
-		referenced[e.SHA] = true
+		referenced[e.Hash] = true
 	}
 
 	blobDir := filepath.Join(dataDir, "blob")

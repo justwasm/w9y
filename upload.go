@@ -114,7 +114,7 @@ flags:
 	if err != nil {
 		return err
 	}
-	u.RawQuery = "sha256=" + sha
+	u.RawQuery = "hash=" + sha
 
 	req, err := http.NewRequest(http.MethodPut, u.String(), body)
 	if err != nil {
