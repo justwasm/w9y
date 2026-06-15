@@ -129,15 +129,27 @@ func isPseudoVersion(s string) bool {
 
 // resolvePseudoVersion resolves a commit hash to a Go pseudo-version
 // via "go list -m -json <importPath>@<commit>".
+// It first resolves the module root from the import path, because
+// go list -m expects module paths, not package paths.
 func resolvePseudoVersion(ctx context.Context, importPath, commit string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "go", "list", "-m", "-json", importPath+"@"+commit)
+	// Resolve module root first — go list -m needs a module path, not a package path
+	modPath, err := moduleRoot(ctx, importPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve module root for %s: %w", importPath, err)
+	}
+
+	cmd := exec.CommandContext(ctx, "go", "list", "-m", "-json", modPath+"@"+commit)
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("resolve %s@%s: %w", importPath, commit, err)
+		var stderr string
+		if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
+			stderr = ": " + strings.TrimSpace(string(exitErr.Stderr))
+		}
+		return "", fmt.Errorf("resolve %s@%s%s", modPath, commit, stderr)
 	}
 
 	var info struct {
@@ -371,7 +383,11 @@ func moduleRoot(ctx context.Context, importPath string) (string, error) {
 	cmd.Env = append(os.Environ(), "GOWORK=off") // avoid workspace mode confusion
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("go list -m: %w", err)
+		var stderr string
+		if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
+			stderr = ": " + strings.TrimSpace(string(exitErr.Stderr))
+		}
+		return "", fmt.Errorf("go list -m %s: %w%s", importPath, err, stderr)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
