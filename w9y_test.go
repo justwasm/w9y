@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -142,6 +143,29 @@ func TestUploadRejectsBlobDestination(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("upload status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestUploadRejectsHashMismatch(t *testing.T) {
+	dir := t.TempDir()
+	server := NewServer(dir)
+
+	body := []byte("wasm")
+	gz := mustGzip(t, body)
+	wrongSHA := sha256Hex([]byte("not the actual content"))
+
+	req := httptest.NewRequest(http.MethodPut, "/foo.wasm?hash="+wrongSHA, bytes.NewReader(gz))
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+
+	// Verify blob was not stored
+	store := NewBlobStore(dir)
+	if _, err := store.Get("/foo.wasm"); !errors.Is(err, ErrPathNotFound) {
+		t.Fatal("mapping should not exist for rejected upload")
 	}
 }
 
