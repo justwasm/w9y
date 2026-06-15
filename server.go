@@ -119,20 +119,13 @@ func handleUpload(w http.ResponseWriter, r *http.Request, store BlobStore, dataD
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			tmp, tmpErr := os.CreateTemp(filepath.Dir(gzPath), "*.wasm.gz")
+			tmpName, written, tmpErr := streamToTemp(filepath.Dir(gzPath), "*.wasm.gz", r.Body)
 			if tmpErr != nil {
-				http.Error(w, tmpErr.Error(), http.StatusInternalServerError)
-				return
-			}
-			tmpName := tmp.Name()
-			defer os.Remove(tmpName)
-			written, copyErr := io.Copy(tmp, r.Body)
-			tmp.Close()
-			if copyErr != nil {
-				http.Error(w, copyErr.Error(), http.StatusBadRequest)
+				http.Error(w, tmpErr.Error(), http.StatusBadRequest)
 				return
 			}
 			if written == 0 {
+				os.Remove(tmpName)
 				http.Error(w, "blob not found", http.StatusNotFound)
 				return
 			}
@@ -158,20 +151,13 @@ func handleUpload(w http.ResponseWriter, r *http.Request, store BlobStore, dataD
 			linked = true
 		}
 	} else {
-		tmp, tmpErr := os.CreateTemp(dataDir, "*.wasm.gz")
+		tmpName, written, tmpErr := streamToTemp(dataDir, "*.wasm.gz", r.Body)
 		if tmpErr != nil {
-			http.Error(w, tmpErr.Error(), http.StatusInternalServerError)
-			return
-		}
-		tmpName := tmp.Name()
-		defer os.Remove(tmpName)
-		written, copyErr := io.Copy(tmp, r.Body)
-		tmp.Close()
-		if copyErr != nil {
-			http.Error(w, copyErr.Error(), http.StatusBadRequest)
+			http.Error(w, tmpErr.Error(), http.StatusBadRequest)
 			return
 		}
 		if written == 0 {
+			os.Remove(tmpName)
 			http.Error(w, "blob not found", http.StatusNotFound)
 			return
 		}
@@ -299,24 +285,10 @@ func serveGzipFile(w http.ResponseWriter, r *http.Request, gzPath string) {
 // verifyGzipHash opens the gzip file at path, decompresses it, and checks
 // whether the SHA256 of the decompressed content matches wantSHA.
 func verifyGzipHash(gzPath, wantSHA string) error {
-	f, err := os.Open(gzPath)
+	gotSHA, err := gzipSHA256(gzPath)
 	if err != nil {
-		return fmt.Errorf("open: %w", err)
+		return err
 	}
-	defer f.Close()
-
-	gr, err := gzip.NewReader(f)
-	if err != nil {
-		return fmt.Errorf("decompress: %w", err)
-	}
-	defer gr.Close()
-
-	h := sha256.New()
-	if _, err := io.Copy(h, gr); err != nil {
-		return fmt.Errorf("hash: %w", err)
-	}
-
-	gotSHA := hex.EncodeToString(h.Sum(nil))
 	if gotSHA != wantSHA {
 		return fmt.Errorf("hash mismatch: got %s, want %s", gotSHA, wantSHA)
 	}

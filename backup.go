@@ -75,16 +75,7 @@ func backupRemote(client *http.Client, host, destDir string) error {
 		parsed = append(parsed, parsedEntry{item.Path, item.Hash, t.UnixMilli()})
 	}
 
-	blobClient := client
-	if tr, ok := client.Transport.(*http.Transport); ok {
-		clone := tr.Clone()
-		clone.DisableCompression = true
-		blobClient = &http.Client{Transport: clone}
-	} else if tr, ok := http.DefaultTransport.(*http.Transport); ok {
-		clone := tr.Clone()
-		clone.DisableCompression = true
-		blobClient = &http.Client{Transport: clone}
-	}
+	blobClient := newNoCompressionClient(client)
 
 	seen := make(map[string]bool, len(items))
 	var downloaded, skipped int

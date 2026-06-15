@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -321,4 +322,60 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// streamToTemp streams body into a temp file in dir, closes the file,
+// and returns the temp file path along with how many bytes were written.
+func streamToTemp(dir, pattern string, body io.Reader) (tmpName string, written int64, err error) {
+	tmp, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return "", 0, err
+	}
+	tmpName = tmp.Name()
+	written, err = io.Copy(tmp, body)
+	tmp.Close()
+	if err != nil {
+		os.Remove(tmpName)
+		return "", 0, err
+	}
+	return tmpName, written, nil
+}
+
+// gzipSHA256 opens the gzip file, decompresses it, and returns the SHA-256
+// hex digest of the decompressed content.
+func gzipSHA256(gzPath string) (string, error) {
+	f, err := os.Open(gzPath)
+	if err != nil {
+		return "", fmt.Errorf("open: %w", err)
+	}
+	defer f.Close()
+
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		return "", fmt.Errorf("decompress: %w", err)
+	}
+	defer gr.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, gr); err != nil {
+		return "", fmt.Errorf("hash: %w", err)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// newNoCompressionClient returns an HTTP client with transport-level
+// compression disabled, so that gzip content is delivered as raw bytes
+// rather than transparently decompressed by the transport layer.
+func newNoCompressionClient(client *http.Client) *http.Client {
+	if tr, ok := client.Transport.(*http.Transport); ok {
+		clone := tr.Clone()
+		clone.DisableCompression = true
+		return &http.Client{Transport: clone}
+	}
+	if tr, ok := http.DefaultTransport.(*http.Transport); ok {
+		clone := tr.Clone()
+		clone.DisableCompression = true
+		return &http.Client{Transport: clone}
+	}
+	return client
 }
