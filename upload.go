@@ -39,10 +39,7 @@ func uploadWithClient(args []string, client *http.Client) error {
 	}
 	sha := sha256Hex(wasm)
 
-	host := os.Getenv("HOST")
-	if host == "" {
-		return errors.New("HOST is required for upload")
-	}
+	host := defaultHost
 
 	blobRemote := blobRemotePath(sha, true)
 	exists, err := remoteFileExists(client, host, blobRemote)

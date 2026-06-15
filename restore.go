@@ -20,10 +20,7 @@ func restore(args []string) error {
 	if fs.NArg() != 1 {
 		return errors.New("restore requires exactly one backup directory")
 	}
-	host := os.Getenv("HOST")
-	if host == "" {
-		return errors.New("HOST is required for restore")
-	}
+	host := defaultHost
 	return restoreRemote(http.DefaultClient, host, fs.Arg(0))
 }
 

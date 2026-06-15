@@ -2,7 +2,6 @@ package w9y
 
 import (
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -18,10 +17,7 @@ func backup(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	host := os.Getenv("HOST")
-	if host == "" {
-		return errors.New("HOST is required for backup")
-	}
+	host := defaultHost
 	destDir := fs.Arg(0)
 	if destDir == "" {
 		destDir = "backup-" + time.Now().Format("20060102-150405")

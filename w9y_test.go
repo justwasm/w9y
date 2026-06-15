@@ -223,7 +223,6 @@ func TestClientUploadWithPrecheck(t *testing.T) {
 		return nil, nil
 	})}
 
-	t.Setenv("HOST", "http://example.test")
 	file := filepath.Join(t.TempDir(), "foo.wasm")
 	if err := os.WriteFile(file, body, 0o644); err != nil {
 		t.Fatal(err)
@@ -262,7 +261,6 @@ func TestClientUploadSendsBodyWhenBlobMissing(t *testing.T) {
 		return nil, nil
 	})}
 
-	t.Setenv("HOST", "http://example.test")
 	file := filepath.Join(t.TempDir(), "foo.wasm")
 	if err := os.WriteFile(file, body, 0o644); err != nil {
 		t.Fatal(err)

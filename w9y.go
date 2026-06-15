@@ -2,6 +2,7 @@ package w9y
 
 import (
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
@@ -19,6 +20,8 @@ import (
 )
 
 const defaultDataDir = "data"
+
+var defaultHost = cmp.Or(os.Getenv("W9Y"), "https://w9y.up.railway.app/")
 
 type entry struct {
 	SHA  string `yaml:"sha" json:"sha"`
@@ -68,7 +71,7 @@ func usage() error {
 env:
   PORT      start server mode on this port when present
   DATA_DIR  server storage directory (default data)
-  HOST      remote server endpoint for upload, backup, and restore`)
+  W9Y       remote server URL (default https://w9y.up.railway.app/)`)
 	return nil
 }
 
