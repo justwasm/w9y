@@ -1,6 +1,8 @@
 package w9y
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -99,21 +101,29 @@ func handleUpload(w http.ResponseWriter, r *http.Request, dataDir, remotePath st
 		sha = s
 		gzPath := blobPath(dataDir, sha, true)
 		if _, err := os.Stat(gzPath); os.IsNotExist(err) {
-			// Blob not yet stored — write body to disk
-			gz, readErr := io.ReadAll(r.Body)
-			if readErr != nil {
-				http.Error(w, readErr.Error(), http.StatusBadRequest)
-				return
-			}
-			if len(gz) == 0 {
-				http.Error(w, "blob not found", http.StatusNotFound)
-				return
-			}
+			// Blob not yet stored — stream body to temp file, then rename
 			if err := os.MkdirAll(filepath.Dir(gzPath), 0o755); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			if err := os.WriteFile(gzPath, gz, 0o644); err != nil {
+			tmp, tmpErr := os.CreateTemp(filepath.Dir(gzPath), "*.wasm.gz")
+			if tmpErr != nil {
+				http.Error(w, tmpErr.Error(), http.StatusInternalServerError)
+				return
+			}
+			tmpName := tmp.Name()
+			defer os.Remove(tmpName)
+			written, copyErr := io.Copy(tmp, r.Body)
+			tmp.Close()
+			if copyErr != nil {
+				http.Error(w, copyErr.Error(), http.StatusBadRequest)
+				return
+			}
+			if written == 0 {
+				http.Error(w, "blob not found", http.StatusNotFound)
+				return
+			}
+			if err := os.Rename(tmpName, gzPath); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -124,18 +134,31 @@ func handleUpload(w http.ResponseWriter, r *http.Request, dataDir, remotePath st
 			linked = true
 		}
 	} else {
-		gz, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		tmp, tmpErr := os.CreateTemp(dataDir, "*.wasm.gz")
+		if tmpErr != nil {
+			http.Error(w, tmpErr.Error(), http.StatusInternalServerError)
 			return
 		}
-		sha = sha256Hex(gz)
+		tmpName := tmp.Name()
+		defer os.Remove(tmpName)
+		h := sha256.New()
+		written, copyErr := io.Copy(io.MultiWriter(tmp, h), r.Body)
+		tmp.Close()
+		if copyErr != nil {
+			http.Error(w, copyErr.Error(), http.StatusBadRequest)
+			return
+		}
+		if written == 0 {
+			http.Error(w, "blob not found", http.StatusNotFound)
+			return
+		}
+		sha = hex.EncodeToString(h.Sum(nil))
 		gzPath := blobPath(dataDir, sha, true)
 		if err := os.MkdirAll(filepath.Dir(gzPath), 0o755); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if err := os.WriteFile(gzPath, gz, 0o644); err != nil {
+		if err := os.Rename(tmpName, gzPath); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
