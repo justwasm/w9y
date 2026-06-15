@@ -275,7 +275,7 @@ func TestClientUploadWithPrecheck(t *testing.T) {
 	if err := os.WriteFile(file, body, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := uploadWithClient([]string{"--to", "/bar.wasm", file}, client); err != nil {
+	if err := uploadFile(client, file, "/bar.wasm"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -313,7 +313,7 @@ func TestClientUploadSendsBodyWhenBlobMissing(t *testing.T) {
 	if err := os.WriteFile(file, body, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := uploadWithClient([]string{file}, client); err != nil {
+	if err := uploadFile(client, file, "/foo.wasm"); err != nil {
 		t.Fatal(err)
 	}
 

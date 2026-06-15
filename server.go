@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path"
@@ -12,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 // NewServer returns the w9y HTTP handler.
@@ -270,6 +273,33 @@ func serveGzipFile(w http.ResponseWriter, r *http.Request, gzPath string) {
 		w.Header().Set("Content-Encoding", "gzip")
 	}
 	http.ServeContent(w, r, path.Base(virtualPath), stat.ModTime(), file)
+}
+
+func newServerCommand() *cobra.Command {
+	var (
+		port    string
+		doCheck bool
+	)
+	cmd := &cobra.Command{
+		Use:   "server [-port port] [-check]",
+		Short: "Start the w9y HTTP server",
+		RunE: func(c *cobra.Command, args []string) error {
+			dataDir := getenv("DATA_DIR", defaultDataDir)
+			addr := ":" + port
+			slog.Info("starting server", "data_dir", dataDir, "addr", addr)
+
+			if doCheck {
+				if err := checkData(dataDir); err != nil {
+					slog.Warn("integrity check found issues", "error", err)
+				}
+			}
+
+			return http.ListenAndServe(addr, NewServer(dataDir))
+		},
+	}
+	cmd.Flags().StringVar(&port, "port", getenv("PORT", "8080"), "server port")
+	cmd.Flags().BoolVar(&doCheck, "check", false, "run blob integrity check on startup")
+	return cmd
 }
 
 // verifyGzipHash opens the gzip file at path, decompresses it, and checks

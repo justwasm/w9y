@@ -4,8 +4,6 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,36 +12,34 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/spf13/cobra"
 )
 
-func upload(args []string) error {
-	return uploadWithClient(args, http.DefaultClient)
+func newUploadCommand() *cobra.Command {
+	var to string
+	cmd := &cobra.Command{
+		Use:   "upload [--to /name.wasm] file.wasm",
+		Short: "Upload a .wasm file to the remote server",
+		Long: `Upload a .wasm file to the remote server.
+
+The file is hashed, gzip-compressed, and uploaded. If the blob already
+exists on the server, only a linking request is sent.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			fileName := args[0]
+			remotePath := to
+			if remotePath == "" {
+				remotePath = "/" + filepath.Base(fileName)
+			}
+			return uploadFile(http.DefaultClient, fileName, remotePath)
+		},
+	}
+	cmd.Flags().StringVar(&to, "to", "", "remote path (default /<filename>)")
+	return cmd
 }
 
-func uploadWithClient(args []string, client *http.Client) error {
-	fs := flag.NewFlagSet("upload", flag.ContinueOnError)
-	to := fs.String("to", "", "remote path to upload to")
-	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), `usage: w9y upload [--to /name.wasm] file.wasm
-
-Upload a .wasm file to the remote server.
-
-flags:
-  --to  remote path (default /<filename>)`)
-	}
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() != 1 {
-		return errors.New("upload requires exactly one file")
-	}
-
-	fileName := fs.Arg(0)
-	remotePath := *to
-	if remotePath == "" {
-		remotePath = "/" + filepath.Base(fileName)
-	}
-
+func uploadFile(client *http.Client, fileName, remotePath string) error {
 	f, err := os.Open(fileName)
 	if err != nil {
 		return err

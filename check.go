@@ -4,32 +4,31 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
-	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/spf13/cobra"
 )
 
 var wasmMagic = []byte{0x00, 0x61, 0x73, 0x6d} // \0asm
 
-func check(args []string) error {
-	fs := flag.NewFlagSet("check", flag.ContinueOnError)
-	dataDir := fs.String("data-dir", getenv("DATA_DIR", defaultDataDir), "data directory")
-	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), `usage: w9y check [-data-dir data]
-
-Verify blob integrity: validate SHA256 and WASM magic bytes for every blob.
-
-flags:
-  -data-dir  data directory (default data)`)
+func newCheckCommand() *cobra.Command {
+	var dataDir string
+	cmd := &cobra.Command{
+		Use:   "check [-data-dir data]",
+		Short: "Verify blob integrity",
+		Long:  `Verify blob integrity: validate SHA256 and WASM magic bytes for every blob.`,
+		Args:  cobra.NoArgs,
+		RunE: func(c *cobra.Command, args []string) error {
+			return checkData(dataDir)
+		},
 	}
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	return checkData(*dataDir)
+	cmd.Flags().StringVar(&dataDir, "data-dir", getenv("DATA_DIR", defaultDataDir), "data directory")
+	return cmd
 }
 
 func checkData(dataDir string) error {

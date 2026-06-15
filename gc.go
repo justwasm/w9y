@@ -1,31 +1,34 @@
 package w9y
 
 import (
-	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/spf13/cobra"
 )
 
-func gc(args []string) error {
-	fs := flag.NewFlagSet("gc", flag.ContinueOnError)
-	clean := fs.Bool("clean", false, "delete orphaned blobs instead of dry-run")
-	dataDir := fs.String("data-dir", getenv("DATA_DIR", defaultDataDir), "data directory")
-	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), `usage: w9y gc [-data-dir data] [-clean]
+func newGCCommand() *cobra.Command {
+	var (
+		dataDir string
+		clean   bool
+	)
+	cmd := &cobra.Command{
+		Use:   "gc [-data-dir data] [-clean]",
+		Short: "Find and remove unreferenced blobs",
+		Long: `Find unreferenced blobs in the data directory.
 
-Find unreferenced blobs in the data directory.
-
-flags:
-  -data-dir  data directory (default data)
-  -clean     delete orphaned blobs instead of dry-run`)
+By default, only lists orphans (dry-run). Use -clean to delete them.`,
+		Args: cobra.NoArgs,
+		RunE: func(c *cobra.Command, args []string) error {
+			return gcData(dataDir, clean)
+		},
 	}
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	return gcData(*dataDir, *clean)
+	cmd.Flags().StringVar(&dataDir, "data-dir", getenv("DATA_DIR", defaultDataDir), "data directory")
+	cmd.Flags().BoolVar(&clean, "clean", false, "delete orphaned blobs instead of dry-run")
+	return cmd
 }
 
 func gcData(dataDir string, clean bool) error {

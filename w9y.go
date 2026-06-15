@@ -7,10 +7,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
-	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -21,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
 
@@ -75,7 +74,7 @@ func (s *fileBlobStore) loadCache() error {
 	}
 	s.cache = m.Entries
 	return nil
-} 
+}
 
 type fileBlobStore struct {
 	dataDir string
@@ -175,84 +174,23 @@ func (s *fileBlobStore) save(entries map[string]Blob) error {
 	return nil
 }
 
-// Run starts server mode when the "server" subcommand is used,
-// otherwise it dispatches to a CLI subcommand.
-func Run(args []string) error {
-	if len(args) == 0 {
-		return usage()
+// NewRootCommand returns the root cobra.Command for the w9y CLI.
+func NewRootCommand() *cobra.Command {
+	root := &cobra.Command{
+		Use:   "w9y [command] [flags] [args]",
+		Short: "WebAssembly blob hosting service",
+		Long: `w9y is a WebAssembly blob hosting service with content-addressed storage,
+automatic gzip serving, and on-demand Go WASM builds.`,
 	}
 
-	switch args[0] {
-	case "server":
-		return runServer(args[1:])
-	case "upload":
-		return runCommand(upload, args[1:])
-	case "backup":
-		return runCommand(backup, args[1:])
-	case "restore":
-		return runCommand(restore, args[1:])
-	case "gc":
-		return runCommand(gc, args[1:])
-	case "check":
-		return runCommand(check, args[1:])
-	case "-h", "--help", "help":
-		return usage()
-	default:
-		return fmt.Errorf("unknown command %q", args[0])
-	}
-}
+	root.AddCommand(newServerCommand())
+	root.AddCommand(newUploadCommand())
+	root.AddCommand(newBackupCommand())
+	root.AddCommand(newRestoreCommand())
+	root.AddCommand(newGCCommand())
+	root.AddCommand(newCheckCommand())
 
-func runServer(args []string) error {
-	fs := flag.NewFlagSet("server", flag.ContinueOnError)
-	doCheck := fs.Bool("check", false, "run blob integrity check on startup")
-	port := fs.String("port", getenv("PORT", "8080"), "server port")
-	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), `usage: w9y server [-port port] [-check]
-
-Start the w9y HTTP server.
-
-flags:
-  -port   server port (default $PORT or 8080)
-  -check  run blob integrity check on startup`)
-	}
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	dataDir := getenv("DATA_DIR", defaultDataDir)
-	addr := ":" + *port
-	slog.Info("starting server", "data_dir", dataDir, "addr", addr)
-
-	if *doCheck {
-		if err := checkData(dataDir); err != nil {
-			slog.Warn("integrity check found issues", "error", err)
-		}
-	}
-
-	return http.ListenAndServe(addr, NewServer(dataDir))
-}
-
-func runCommand(cmd func([]string) error, args []string) error {
-	err := cmd(args)
-	if errors.Is(err, flag.ErrHelp) {
-		return nil
-	}
-	return err
-}
-
-func usage() error {
-	fmt.Fprintln(os.Stderr, `usage:
-  w9y server [-port port] [-check]
-  w9y upload [--to /name.wasm] file.wasm
-  w9y backup [-data-dir data]
-  w9y restore [-data-dir data]
-  w9y gc [-data-dir data] [-clean]
-  w9y check [-data-dir data]
-
-env:
-  DATA_DIR  data directory (default data)
-  W9Y       remote server URL (default https://w9y.up.railway.app/)`)
-	return nil
+	return root
 }
 
 func remoteFileExists(client *http.Client, host, remotePath string) (bool, error) {

@@ -1,8 +1,6 @@
 package w9y
 
 import (
-	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,27 +8,23 @@ import (
 	"net/url"
 	"os"
 	"strings"
+
+	"github.com/spf13/cobra"
 )
 
-func restore(args []string) error {
-	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
-	dataDir := fs.String("data-dir", getenv("DATA_DIR", defaultDataDir), "data directory")
-	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), `usage: w9y restore [-data-dir data]
-
-Restore all entries and blobs from local data directory to remote server.
-
-flags:
-  -data-dir  data directory (default data)`)
+func newRestoreCommand() *cobra.Command {
+	var dataDir string
+	cmd := &cobra.Command{
+		Use:   "restore [-data-dir data]",
+		Short: "Restore all entries and blobs to remote server",
+		Long:  `Restore all entries and blobs from local data directory to remote server.`,
+		Args:  cobra.NoArgs,
+		RunE: func(c *cobra.Command, args []string) error {
+			return restoreRemote(http.DefaultClient, defaultHost, dataDir)
+		},
 	}
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() > 0 {
-		return errors.New("restore takes no positional arguments")
-	}
-	host := defaultHost
-	return restoreRemote(http.DefaultClient, host, *dataDir)
+	cmd.Flags().StringVar(&dataDir, "data-dir", getenv("DATA_DIR", defaultDataDir), "data directory")
+	return cmd
 }
 
 func restoreRemote(client *http.Client, host, backupDir string) error {

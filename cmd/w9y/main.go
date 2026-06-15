@@ -1,15 +1,16 @@
 package main
 
 import (
-	"log/slog"
+	"context"
 	"os"
+
+	"charm.land/fang/v2"
 
 	"github.com/btwiuse/w9y"
 )
 
 func main() {
-	if err := w9y.Run(os.Args[1:]); err != nil {
-		slog.Error(err.Error())
+	if err := fang.Execute(context.Background(), w9y.NewRootCommand()); err != nil {
 		os.Exit(1)
 	}
 }
