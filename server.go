@@ -246,9 +246,20 @@ func serveGzipFile(w http.ResponseWriter, r *http.Request, gzPath string) {
 		return
 	}
 
+	// Peek at first two bytes to detect gzip magic (0x1f, 0x8b).
+	// Only set Content-Encoding: gzip when the file is actually gzip compressed.
+	var header [2]byte
+	if _, err := io.ReadFull(file, header[:]); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	file.Seek(0, io.SeekStart)
+
 	virtualPath := strings.TrimSuffix(gzPath, ".gz")
 	w.Header().Set("Content-Type", contentType(virtualPath))
-	w.Header().Set("Content-Encoding", "gzip")
 	w.Header().Set("Vary", "Accept-Encoding")
+	if header[0] == 0x1f && header[1] == 0x8b {
+		w.Header().Set("Content-Encoding", "gzip")
+	}
 	http.ServeContent(w, r, path.Base(virtualPath)+".gz", stat.ModTime(), file)
 }

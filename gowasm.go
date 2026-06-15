@@ -181,15 +181,11 @@ func buildOrWait(dataDir, importPath, version, remotePath string, reqCtx context
 }
 
 // doBuildGoWasm runs the actual Go build, stores the result, and returns the SHA.
+// Uses go install with an isolated temp GOPATH, since go build pkg@version
+// is not supported — only go install and go get accept the @version syntax.
 func doBuildGoWasm(reqCtx context.Context, dataDir, importPath, version, remotePath string) (string, error) {
 	ctx, cancel := context.WithTimeout(reqCtx, 5*time.Minute)
 	defer cancel()
-
-	// Verify the package is a main package
-	if err := checkIsMain(ctx, importPath, version); err != nil {
-		slog.Error("package is not a main package", "import_path", importPath, "version", version, "error", err)
-		return "", fmt.Errorf("%s is not a main package", importPath)
-	}
 
 	tmpDir, err := os.MkdirTemp("", "w9y-gowasm")
 	if err != nil {
@@ -197,7 +193,6 @@ func doBuildGoWasm(reqCtx context.Context, dataDir, importPath, version, remoteP
 	}
 	defer os.RemoveAll(tmpDir)
 
-	output := filepath.Join(tmpDir, "output.wasm")
 	pkg := importPath + "@" + version
 
 	slog.Info("building Go WASM",
@@ -205,18 +200,22 @@ func doBuildGoWasm(reqCtx context.Context, dataDir, importPath, version, remoteP
 		"version", version,
 	)
 
-	cmd := exec.CommandContext(ctx, "go", "build",
-		"-o", output,
+	cmd := exec.CommandContext(ctx, "go", "install",
 		"-trimpath",
 		"-ldflags", "-s -w",
 		pkg,
 	)
-	cmd.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
+	cmd.Env = append(os.Environ(),
+		"GOOS=js",
+		"GOARCH=wasm",
+		"GOPATH="+tmpDir,
+		"GOWORK=off",
+	)
 	cmd.Stderr = new(bytes.Buffer)
 
 	if err := cmd.Run(); err != nil {
 		stderr := cmd.Stderr.(*bytes.Buffer).String()
-		slog.Error("go build failed",
+		slog.Error("go install failed",
 			"import_path", importPath,
 			"version", version,
 			"error", err,
@@ -225,7 +224,17 @@ func doBuildGoWasm(reqCtx context.Context, dataDir, importPath, version, remoteP
 		return "", fmt.Errorf("build failed: %s\n\n%s", err, stderr)
 	}
 
-	wasm, err := os.ReadFile(output)
+	// Find the built wasm binary: <GOPATH>/bin/js_wasm/<basename>
+	binDir := filepath.Join(tmpDir, "bin", "js_wasm")
+	entries, err := os.ReadDir(binDir)
+	if err != nil {
+		return "", fmt.Errorf("output not found in %s: %w", binDir, err)
+	}
+	if len(entries) == 0 {
+		return "", fmt.Errorf("output not found in %s: empty directory", binDir)
+	}
+
+	wasm, err := os.ReadFile(filepath.Join(binDir, entries[0].Name()))
 	if err != nil {
 		return "", err
 	}
@@ -255,26 +264,6 @@ func doBuildGoWasm(reqCtx context.Context, dataDir, importPath, version, remoteP
 	}
 
 	return sha, nil
-}
-
-// checkIsMain verifies that the given package at the specified version
-// compiles to a main binary under GOOS=js GOARCH=wasm.
-func checkIsMain(ctx context.Context, importPath, version string) error {
-	pkg := importPath
-	if version != "" {
-		pkg += "@" + version
-	}
-	cmd := exec.CommandContext(ctx, "go", "list", "-f", "{{.Name}}", pkg)
-	cmd.Env = append(cmd.Environ(), "GOOS=js", "GOARCH=wasm", "GOWORK=off")
-	out, err := cmd.Output()
-	if err != nil {
-		return fmt.Errorf("go list: %w", err)
-	}
-	name := strings.TrimSpace(string(out))
-	if name != "main" {
-		return fmt.Errorf("package name is %q, want \"main\"", name)
-	}
-	return nil
 }
 
 // moduleRoot resolves the module path containing importPath.

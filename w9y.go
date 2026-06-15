@@ -40,6 +40,12 @@ func Run(args []string) error {
 		dataDir := getenv("DATA_DIR", defaultDataDir)
 		addr := ":" + port
 		slog.Info("starting server", "data_dir", dataDir, "addr", addr)
+
+		// Integrity check on startup — errors are logged, not fatal
+		if err := checkData(dataDir); err != nil {
+			slog.Warn("integrity check found issues", "error", err)
+		}
+
 		return http.ListenAndServe(addr, NewServer(dataDir))
 	}
 
@@ -57,6 +63,8 @@ func Run(args []string) error {
 		err = restore(args[1:])
 	case "gc":
 		err = gc(args[1:])
+	case "check":
+		err = check(args[1:])
 	case "-h", "--help", "help":
 		return usage()
 	default:
@@ -74,6 +82,7 @@ func usage() error {
   w9y backup [-data-dir data] [dest-dir]
   w9y restore [-data-dir data] [backup-dir]
   w9y gc [-data-dir data] [-clean]
+  w9y check [-data-dir data]
 
 env:
   PORT      start server mode on this port when present
