@@ -16,27 +16,23 @@ import (
 
 func backup(args []string) error {
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
-	dataDir := fs.String("data-dir", getenv("DATA_DIR", "data"), "backup destination directory")
+	dataDir := fs.String("data-dir", getenv("DATA_DIR", "data"), "data directory")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), `usage: w9y backup [-data-dir data] [dest-dir]
+		fmt.Fprintln(fs.Output(), `usage: w9y backup [-data-dir data]
 
-Backup all entries and blobs from remote server to a local directory.
+Backup all entries and blobs from remote server to local data directory.
 
 flags:
-  -data-dir  destination directory (default data)`)
+  -data-dir  data directory (default data)`)
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() > 1 {
-		return errors.New("backup takes at most one argument (destination directory)")
+	if fs.NArg() > 0 {
+		return errors.New("backup takes no positional arguments")
 	}
 	host := defaultHost
-	destDir := fs.Arg(0)
-	if destDir == "" {
-		destDir = *dataDir
-	}
-	return backupRemote(http.DefaultClient, host, destDir)
+	return backupRemote(http.DefaultClient, host, *dataDir)
 }
 
 func backupRemote(client *http.Client, host, destDir string) error {

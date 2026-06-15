@@ -34,42 +34,65 @@ type mapping struct {
 	Entries map[string]entry `yaml:"entries"`
 }
 
-// Run starts server mode when PORT is set, otherwise it runs the CLI.
+// Run starts server mode when the "server" subcommand is used,
+// otherwise it dispatches to a CLI subcommand.
 func Run(args []string) error {
-	if port := os.Getenv("PORT"); port != "" {
-		dataDir := getenv("DATA_DIR", defaultDataDir)
-		addr := ":" + port
-		slog.Info("starting server", "data_dir", dataDir, "addr", addr)
-
-		// Integrity check on startup — errors are logged, not fatal
-		if err := checkData(dataDir); err != nil {
-			slog.Warn("integrity check found issues", "error", err)
-		}
-
-		return http.ListenAndServe(addr, NewServer(dataDir))
-	}
-
 	if len(args) == 0 {
 		return usage()
 	}
 
-	var err error
 	switch args[0] {
+	case "server":
+		return runServer(args[1:])
 	case "upload":
-		err = upload(args[1:])
+		return runCommand(upload, args[1:])
 	case "backup":
-		err = backup(args[1:])
+		return runCommand(backup, args[1:])
 	case "restore":
-		err = restore(args[1:])
+		return runCommand(restore, args[1:])
 	case "gc":
-		err = gc(args[1:])
+		return runCommand(gc, args[1:])
 	case "check":
-		err = check(args[1:])
+		return runCommand(check, args[1:])
 	case "-h", "--help", "help":
 		return usage()
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runServer(args []string) error {
+	fs := flag.NewFlagSet("server", flag.ContinueOnError)
+	doCheck := fs.Bool("check", false, "run blob integrity check on startup")
+	port := fs.String("port", getenv("PORT", "8080"), "server port")
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), `usage: w9y server [-port port] [-check]
+
+Start the w9y HTTP server.
+
+flags:
+  -port   server port (default $PORT or 8080)
+  -check  run blob integrity check on startup`)
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	dataDir := getenv("DATA_DIR", defaultDataDir)
+	addr := ":" + *port
+	slog.Info("starting server", "data_dir", dataDir, "addr", addr)
+
+	if *doCheck {
+		if err := checkData(dataDir); err != nil {
+			slog.Warn("integrity check found issues", "error", err)
+		}
+	}
+
+	return http.ListenAndServe(addr, NewServer(dataDir))
+}
+
+func runCommand(cmd func([]string) error, args []string) error {
+	err := cmd(args)
 	if errors.Is(err, flag.ErrHelp) {
 		return nil
 	}
@@ -78,14 +101,14 @@ func Run(args []string) error {
 
 func usage() error {
 	fmt.Fprintln(os.Stderr, `usage:
+  w9y server [-port port] [-check]
   w9y upload [--to /name.wasm] file.wasm
-  w9y backup [-data-dir data] [dest-dir]
-  w9y restore [-data-dir data] [backup-dir]
+  w9y backup [-data-dir data]
+  w9y restore [-data-dir data]
   w9y gc [-data-dir data] [-clean]
   w9y check [-data-dir data]
 
 env:
-  PORT      start server mode on this port when present
   DATA_DIR  data directory (default data)
   W9Y       remote server URL (default https://w9y.up.railway.app/)`)
 	return nil

@@ -14,27 +14,23 @@ import (
 
 func restore(args []string) error {
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
-	dataDir := fs.String("data-dir", getenv("DATA_DIR", "data"), "backup source directory")
+	dataDir := fs.String("data-dir", getenv("DATA_DIR", "data"), "data directory")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), `usage: w9y restore [-data-dir data] [backup-dir]
+		fmt.Fprintln(fs.Output(), `usage: w9y restore [-data-dir data]
 
-Restore all entries and blobs from a local backup to the remote server.
+Restore all entries and blobs from local data directory to remote server.
 
 flags:
-  -data-dir  backup source directory (default data)`)
+  -data-dir  data directory (default data)`)
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if fs.NArg() > 0 {
+		return errors.New("restore takes no positional arguments")
+	}
 	host := defaultHost
-	backupDir := fs.Arg(0)
-	if backupDir == "" {
-		backupDir = *dataDir
-	}
-	if fs.NArg() > 1 {
-		return errors.New("restore takes at most one argument (backup directory)")
-	}
-	return restoreRemote(http.DefaultClient, host, backupDir)
+	return restoreRemote(http.DefaultClient, host, *dataDir)
 }
 
 func restoreRemote(client *http.Client, host, backupDir string) error {
