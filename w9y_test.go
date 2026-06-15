@@ -421,6 +421,83 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 	}
 }
 
+func TestGCDryRunPrintsOrphans(t *testing.T) {
+	dir := t.TempDir()
+	sha := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+	if err := os.MkdirAll(filepath.Join(dir, "blob"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "blob", sha+".wasm.gz"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// No mapping → all blobs are orphans
+	if err := gcData(dir, false); err != nil {
+		t.Fatal(err)
+	}
+
+	// Blob should still exist (dry run)
+	if _, err := os.Stat(filepath.Join(dir, "blob", sha+".wasm.gz")); err != nil {
+		t.Fatal("dry run should not delete blobs")
+	}
+}
+
+func TestGCCleanRemovesOrphans(t *testing.T) {
+	dir := t.TempDir()
+	sha := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+	if err := os.MkdirAll(filepath.Join(dir, "blob"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "blob", sha+".wasm.gz"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := gcData(dir, true); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "blob", sha+".wasm.gz")); !os.IsNotExist(err) {
+		t.Fatal("clean should delete orphaned blobs")
+	}
+}
+
+func TestGCLeavesReferencedBlobs(t *testing.T) {
+	dir := t.TempDir()
+	sha := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+	if err := os.MkdirAll(filepath.Join(dir, "blob"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "blob", sha+".wasm.gz"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := &mapping{Entries: map[string]entry{"/foo.wasm": {SHA: sha, Time: 100}}}
+	if err := saveMapping(dir, m); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := gcData(dir, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Referenced blob should still exist even with -clean
+	if _, err := os.Stat(filepath.Join(dir, "blob", sha+".wasm.gz")); err != nil {
+		t.Fatal("referenced blobs should not be removed")
+	}
+}
+
+func TestGCWithNoBlobDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := gcData(dir, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := gcData(dir, true); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestNotFoundReturns404(t *testing.T) {
 	dir := t.TempDir()
 	server := NewServer(dir)
