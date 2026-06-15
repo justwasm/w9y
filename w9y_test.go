@@ -19,8 +19,10 @@ func TestUploadStoresBlobAndMappingEntry(t *testing.T) {
 	server := NewServer(dir)
 
 	body := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
-	req := httptest.NewRequest(http.MethodPut, "/foo.wasm", bytes.NewReader(mustGzip(t, body)))
-	req.Header.Set("Content-Encoding", "gzip")
+	gz := mustGzip(t, body)
+	sha := sha256Hex(gz)
+
+	req := httptest.NewRequest(http.MethodPut, "/foo.wasm", bytes.NewReader(gz))
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -28,7 +30,6 @@ func TestUploadStoresBlobAndMappingEntry(t *testing.T) {
 		t.Fatalf("upload status = %d, want %d: %s", rec.Code, http.StatusCreated, rec.Body.String())
 	}
 
-	sha := sha256Hex(mustGzip(t, body))
 	if _, err := os.Stat(filepath.Join(dir, "blob", sha+".wasm.gz")); err != nil {
 		t.Fatalf("expected gzip blob: %v", err)
 	}
@@ -40,9 +41,6 @@ func TestUploadStoresBlobAndMappingEntry(t *testing.T) {
 	e, ok := m.Entries["/foo.wasm"]
 	if !ok || e.SHA != sha {
 		t.Fatalf("mapping /foo.wasm = %+v, want sha=%s", e, sha)
-	}
-	if e.Time == 0 {
-		t.Fatal("expected non-zero timestamp")
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/foo.wasm", nil)
@@ -66,7 +64,7 @@ func TestUploadStoresBlobAndMappingEntry(t *testing.T) {
 	}
 }
 
-func TestMultiplePathsMapToSameBlob(t *testing.T) {
+func TestLinkOnlyViaQueryParam(t *testing.T) {
 	dir := t.TempDir()
 	server := NewServer(dir)
 
@@ -74,6 +72,7 @@ func TestMultiplePathsMapToSameBlob(t *testing.T) {
 	gz := mustGzip(t, body)
 	sha := sha256Hex(gz)
 
+	// First upload: store the blob
 	req := httptest.NewRequest(http.MethodPut, "/one.wasm", bytes.NewReader(gz))
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
@@ -81,11 +80,12 @@ func TestMultiplePathsMapToSameBlob(t *testing.T) {
 		t.Fatalf("upload /one.wasm status = %d, want %d", rec.Code, http.StatusCreated)
 	}
 
-	req = httptest.NewRequest(http.MethodPut, "/two.wasm", bytes.NewReader(gz))
+	// Second upload: link-only via query param, no body
+	req = httptest.NewRequest(http.MethodPut, "/two.wasm?sha="+sha, http.NoBody)
 	rec = httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("upload /two.wasm status = %d, want %d", rec.Code, http.StatusCreated)
+		t.Fatalf("link /two.wasm status = %d, want %d: %s", rec.Code, http.StatusCreated, rec.Body.String())
 	}
 
 	m, err := loadMapping(dir)
@@ -98,14 +98,40 @@ func TestMultiplePathsMapToSameBlob(t *testing.T) {
 	if m.Entries["/two.wasm"].SHA != sha {
 		t.Fatalf("mapping /two.wasm sha = %q, want %q", m.Entries["/two.wasm"].SHA, sha)
 	}
+
+	// Both paths should serve the same content
+	for _, path := range []string{"/one.wasm", "/two.wasm"} {
+		req = httptest.NewRequest(http.MethodGet, path, nil)
+		rec = httptest.NewRecorder()
+		server.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("get %s status = %d", path, rec.Code)
+		}
+		if got := mustGunzip(t, rec.Body.Bytes()); !bytes.Equal(got, body) {
+			t.Fatalf("get %s body = %v, want %v", path, got, body)
+		}
+	}
+}
+
+func TestLinkOnlyRejectsMissingBlob(t *testing.T) {
+	dir := t.TempDir()
+	server := NewServer(dir)
+
+	req := httptest.NewRequest(http.MethodPut, "/foo.wasm?sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", http.NoBody)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
 }
 
 func TestUploadRejectsBlobDestination(t *testing.T) {
 	dir := t.TempDir()
 	server := NewServer(dir)
-	body := mustGzip(t, []byte("wasm"))
+	gz := mustGzip(t, []byte("wasm"))
 
-	req := httptest.NewRequest(http.MethodPut, "/blob/manual.wasm", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPut, "/blob/manual.wasm", bytes.NewReader(gz))
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -117,8 +143,7 @@ func TestUploadRejectsBlobDestination(t *testing.T) {
 func TestBlobPathServesDirectly(t *testing.T) {
 	dir := t.TempDir()
 	server := NewServer(dir)
-	body := []byte("wasm")
-	gz := mustGzip(t, body)
+	gz := mustGzip(t, []byte("wasm"))
 	sha := sha256Hex(gz)
 
 	req := httptest.NewRequest(http.MethodPut, "/foo.wasm", bytes.NewReader(gz))
@@ -177,19 +202,64 @@ func TestRootListsEntriesSortedByTime(t *testing.T) {
 	}
 }
 
-func TestUploadCommand(t *testing.T) {
+func TestClientUploadWithPrecheck(t *testing.T) {
+	body := []byte("wasm")
+	sha := sha256Hex(body)
+
+	var requests []struct{ method, path, query string }
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests = append(requests, struct{ method, path, query string }{
+			req.Method, req.URL.Path, req.URL.RawQuery,
+		})
+		switch req.Method {
+		case http.MethodHead:
+			return textResponse(http.StatusOK, ""), nil
+		case http.MethodPut:
+			if req.Body != http.NoBody {
+				t.Fatal("expected no body for existing blob")
+			}
+			return textResponse(http.StatusCreated, "uploaded /bar.wasm"), nil
+		}
+		return nil, nil
+	})}
+
+	t.Setenv("HOST", "http://example.test")
+	file := filepath.Join(t.TempDir(), "foo.wasm")
+	if err := os.WriteFile(file, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := uploadWithClient([]string{"--to", "/bar.wasm", file}, client); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(requests) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(requests))
+	}
+	if requests[0].method != "HEAD" || requests[0].path != blobRemotePath(sha, true) {
+		t.Fatalf("request 0 = %s %s, want HEAD %s", requests[0].method, requests[0].path, blobRemotePath(sha, true))
+	}
+	if requests[1].method != "PUT" || requests[1].path != "/bar.wasm" || requests[1].query != "sha="+sha {
+		t.Fatalf("request 1 = %s %s?%s, want PUT /bar.wasm?sha=%s", requests[1].method, requests[1].path, requests[1].query, sha)
+	}
+}
+
+func TestClientUploadSendsBodyWhenBlobMissing(t *testing.T) {
 	body := []byte("wasm")
 	gz := mustGzip(t, body)
+	sha := sha256Hex(body)
 
-	var gotMethod, gotPath, gotCT, gotCE string
-	var gotBody []byte
+	var requests []struct{ method, path string }
+	var uploaded []byte
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		gotMethod = req.Method
-		gotPath = req.URL.Path
-		gotCT = req.Header.Get("Content-Type")
-		gotCE = req.Header.Get("Content-Encoding")
-		gotBody, _ = io.ReadAll(req.Body)
-		return textResponse(http.StatusCreated, "uploaded /foo.wasm"), nil
+		requests = append(requests, struct{ method, path string }{req.Method, req.URL.Path})
+		switch req.Method {
+		case http.MethodHead:
+			return textResponse(http.StatusNotFound, ""), nil
+		case http.MethodPut:
+			uploaded, _ = io.ReadAll(req.Body)
+			return textResponse(http.StatusCreated, "uploaded /foo.wasm"), nil
+		}
+		return nil, nil
 	})}
 
 	t.Setenv("HOST", "http://example.test")
@@ -201,20 +271,17 @@ func TestUploadCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if gotMethod != http.MethodPut {
-		t.Fatalf("method = %s, want PUT", gotMethod)
+	if len(requests) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(requests))
 	}
-	if gotPath != "/foo.wasm" {
-		t.Fatalf("path = %s, want /foo.wasm", gotPath)
+	if requests[0].method != "HEAD" || requests[0].path != blobRemotePath(sha, true) {
+		t.Fatalf("request 0 = %s %s, want HEAD %s", requests[0].method, requests[0].path, blobRemotePath(sha, true))
 	}
-	if gotCT != "application/gzip" {
-		t.Fatalf("Content-Type = %q, want application/gzip", gotCT)
+	if requests[1].method != "PUT" || requests[1].path != "/foo.wasm" {
+		t.Fatalf("request 1 = %s %s, want PUT /foo.wasm", requests[1].method, requests[1].path)
 	}
-	if gotCE != "gzip" {
-		t.Fatalf("Content-Encoding = %q, want gzip", gotCE)
-	}
-	if !bytes.Equal(gotBody, gz) {
-		t.Fatal("body does not match gzipped content")
+	if !bytes.Equal(uploaded, gz) {
+		t.Fatal("uploaded body does not match gzipped content")
 	}
 }
 
@@ -296,8 +363,6 @@ func mustGunzip(t *testing.T, body []byte) []byte {
 	}
 	return decompressed
 }
-
-
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 

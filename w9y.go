@@ -100,21 +100,44 @@ func uploadWithClient(args []string, client *http.Client) error {
 	if err != nil {
 		return err
 	}
-	gz, err := gzipBytes(wasm)
-	if err != nil {
-		return err
-	}
+	sha := sha256Hex(wasm)
 
 	host := os.Getenv("HOST")
 	if host == "" {
 		return errors.New("HOST is required for upload")
 	}
-	endpoint, err := joinEndpoint(host, remotePath)
+
+	blobRemote := blobRemotePath(sha, true)
+	exists, err := remoteFileExists(client, host, blobRemote)
 	if err != nil {
 		return err
 	}
 
-	req, err := http.NewRequest(http.MethodPut, endpoint, bytes.NewReader(gz))
+	ep := remotePath
+	var body io.Reader
+	if exists {
+		body = http.NoBody
+	} else {
+		gz, err := gzipBytes(wasm)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewReader(gz)
+	}
+
+	u, err := url.Parse(host)
+	if err != nil {
+		return err
+	}
+	u.Path, err = url.JoinPath(u.Path, ep)
+	if err != nil {
+		return err
+	}
+	if exists {
+		u.RawQuery = "sha=" + sha
+	}
+
+	req, err := http.NewRequest(http.MethodPut, u.String(), body)
 	if err != nil {
 		return err
 	}
@@ -127,12 +150,40 @@ func uploadWithClient(args []string, client *http.Client) error {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("upload failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		return fmt.Errorf("upload failed: %s: %s", resp.Status, strings.TrimSpace(string(bodyBytes)))
 	}
-	fmt.Printf("%s\n", strings.TrimSpace(string(body)))
+	fmt.Printf("%s\n", strings.TrimSpace(string(bodyBytes)))
 	return nil
+}
+
+func remoteFileExists(client *http.Client, host, remotePath string) (bool, error) {
+	u, err := url.Parse(host)
+	if err != nil {
+		return false, err
+	}
+	u.Path, err = url.JoinPath(u.Path, remotePath)
+	if err != nil {
+		return false, err
+	}
+	req, err := http.NewRequest(http.MethodHead, u.String(), nil)
+	if err != nil {
+		return false, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	default:
+		return false, fmt.Errorf("blob check failed: %s", resp.Status)
+	}
 }
 
 func backup(args []string) error {
@@ -345,21 +396,34 @@ func handleUpload(w http.ResponseWriter, r *http.Request, dataDir, remotePath st
 		return
 	}
 
-	gz, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	sha := sha256Hex(gz)
-
-	gzPath := blobPath(dataDir, sha, true)
-	if err := os.MkdirAll(filepath.Dir(gzPath), 0o755); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if err := os.WriteFile(gzPath, gz, 0o644); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	var sha string
+	if s := r.URL.Query().Get("sha"); s != "" {
+		sha = s
+		gzPath := blobPath(dataDir, sha, true)
+		if _, err := os.Stat(gzPath); err != nil {
+			if os.IsNotExist(err) {
+				http.Error(w, "blob not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		gz, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		sha = sha256Hex(gz)
+		gzPath := blobPath(dataDir, sha, true)
+		if err := os.MkdirAll(filepath.Dir(gzPath), 0o755); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := os.WriteFile(gzPath, gz, 0o644); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	m, err := loadMapping(dataDir)
@@ -520,10 +584,6 @@ func contentType(remotePath string) string {
 		return typ
 	}
 	return "application/octet-stream"
-}
-
-func joinEndpoint(host, remotePath string) (string, error) {
-	return url.JoinPath(host, remotePath)
 }
 
 func getenv(key, fallback string) string {
