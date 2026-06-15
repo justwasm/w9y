@@ -58,16 +58,17 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 		if err != nil {
 			return fmt.Errorf("missing blob %s in backup: %v", sha, err)
 		}
-		defer f.Close()
 
 		fi, err := f.Stat()
 		if err != nil {
+			f.Close()
 			return fmt.Errorf("stat blob %s: %v", sha, err)
 		}
 
 		blobRemote := blobRemotePath(sha, true)
 		exists, err := remoteFileExists(client, host, blobRemote)
 		if err != nil {
+			f.Close()
 			return err
 		}
 
@@ -81,6 +82,7 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 				body = http.NoBody
 			} else {
 				if _, err := f.Seek(0, io.SeekStart); err != nil {
+					f.Close()
 					return fmt.Errorf("seek blob %s: %v", sha, err)
 				}
 				body = f
@@ -88,6 +90,7 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 
 			req, err := http.NewRequest(http.MethodPut, u.String(), body)
 			if err != nil {
+				f.Close()
 				return fmt.Errorf("restore %s: %v", be.path, err)
 			}
 			if !exists {
@@ -98,11 +101,13 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 
 			resp, err := client.Do(req)
 			if err != nil {
+				f.Close()
 				return fmt.Errorf("restore %s: %v", be.path, err)
 			}
 			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 			resp.Body.Close()
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				f.Close()
 				return fmt.Errorf("restore %s: %s: %s", be.path, resp.Status, strings.TrimSpace(string(bodyBytes)))
 			}
 
@@ -118,6 +123,7 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 			}
 			exists = true
 		}
+		f.Close()
 	}
 
 	slog.Info("restore complete", "uploaded", uploaded, "linked", linked)

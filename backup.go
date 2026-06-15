@@ -57,17 +57,22 @@ func backupRemote(client *http.Client, host, destDir string) error {
 		return err
 	}
 
-	// Merge: load existing local mapping, overlay remote entries
+	// Parse remote entries
 	slog.Info("fetched entries from remote", "count", len(items))
-	store := NewBlobStore(destDir)
+
+	// Store parsed items so we can write mapping after blobs are downloaded
+	type parsedEntry struct {
+		path string
+		hash string
+		time int64
+	}
+	parsed := make([]parsedEntry, 0, len(items))
 	for _, item := range items {
 		t, parseErr := time.Parse(time.RFC3339Nano, item.Time)
 		if parseErr != nil {
 			return fmt.Errorf("parse time %q: %v", item.Time, parseErr)
 		}
-		if err := store.Set(item.Path, Blob{Hash: item.Hash, Time: t.UnixMilli()}); err != nil {
-			return err
-		}
+		parsed = append(parsed, parsedEntry{item.Path, item.Hash, t.UnixMilli()})
 	}
 
 	blobClient := client
@@ -142,6 +147,14 @@ func backupRemote(client *http.Client, host, destDir string) error {
 
 	if downloaded > 0 || skipped > 0 {
 		slog.Info("backup complete", "downloaded", downloaded, "skipped", skipped)
+	}
+
+	// Write mapping only after all blobs are successfully downloaded
+	store := NewBlobStore(destDir)
+	for _, p := range parsed {
+		if err := store.Set(p.path, Blob{Hash: p.hash, Time: p.time}); err != nil {
+			return err
+		}
 	}
 
 	return nil

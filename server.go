@@ -94,7 +94,11 @@ func handleList(w http.ResponseWriter, store BlobStore, dataDir string) {
 	})
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	enc, _ := json.MarshalIndent(items, "", "  ")
+	enc, err := json.MarshalIndent(items, "", "  ")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Write(enc)
 }
 
@@ -146,6 +150,11 @@ func handleUpload(w http.ResponseWriter, r *http.Request, store BlobStore, dataD
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		} else {
+			// Verify existing blob's hash matches the claimed hash
+			if err := verifyGzipHash(gzPath, sha); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 			linked = true
 		}
 	} else {
@@ -284,7 +293,7 @@ func serveGzipFile(w http.ResponseWriter, r *http.Request, gzPath string) {
 	if header[0] == 0x1f && header[1] == 0x8b {
 		w.Header().Set("Content-Encoding", "gzip")
 	}
-	http.ServeContent(w, r, path.Base(virtualPath)+".gz", stat.ModTime(), file)
+	http.ServeContent(w, r, path.Base(virtualPath), stat.ModTime(), file)
 }
 
 // verifyGzipHash opens the gzip file at path, decompresses it, and checks

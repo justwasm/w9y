@@ -262,6 +262,10 @@ func cleanRemotePath(remotePath string) (string, error) {
 	if !strings.HasPrefix(p, "/") {
 		p = "/" + p
 	}
+	// Reject path traversal
+	if strings.Contains(p, "..") {
+		return "", fmt.Errorf("invalid remote path %q", remotePath)
+	}
 	return p, nil
 }
 

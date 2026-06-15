@@ -43,7 +43,7 @@ func parseGoWasmPath(remotePath string) (goWasmPath, bool) {
 	trimmed := strings.TrimPrefix(remotePath, goWasmPrefix)
 
 	// Split on @
-	atIdx := strings.LastIndexByte(trimmed, '@')
+	atIdx := strings.IndexByte(trimmed, '@')
 	var importPath, version string
 	if atIdx == -1 {
 		importPath = trimmed
