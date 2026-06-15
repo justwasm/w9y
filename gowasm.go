@@ -67,31 +67,31 @@ func handleGoWasm(w http.ResponseWriter, r *http.Request, builder *GoWasmBuilder
 		return
 	}
 
-	// "latest" or empty → resolve to actual latest version and redirect
+	// "latest" or empty → try to resolve to a concrete version and redirect.
+	// If resolution fails (e.g. no network access to proxy), build @latest directly.
 	if gwp.Version == "" || gwp.Version == "latest" {
 		version, err := resolvePseudoVersion(r.Context(), gwp.ImportPath, "latest")
-		if err != nil {
-			// Fallback: list versions if resolution fails
-			listGoVersions(w, r, gwp.ImportPath)
-			return
-		}
-		canonical := goWasmPrefix + gwp.ImportPath + "@" + version
-		http.Redirect(w, r, canonical, http.StatusFound)
-		return
-	}
-
-	// Resolve non-canonical references (commit hashes, branch names, etc.)
-	// to their canonical pseudo-versions for cleaner mapping paths.
-	if !isPseudoVersion(gwp.Version) {
-		version, err := resolvePseudoVersion(r.Context(), gwp.ImportPath, gwp.Version)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		if version != gwp.Version {
+		if err == nil {
 			canonical := goWasmPrefix + gwp.ImportPath + "@" + version
 			http.Redirect(w, r, canonical, http.StatusFound)
 			return
+		}
+		slog.Warn("could not resolve latest version, building @latest directly",
+			"import_path", gwp.ImportPath, "error", err)
+		gwp.Version = "latest"
+		remotePath = goWasmPrefix + gwp.ImportPath + "@latest"
+	} else if !isPseudoVersion(gwp.Version) {
+		// Non-canonical reference (commit hash, branch name) — try to resolve to
+		// a canonical pseudo-version for cleaner mapping paths. Best-effort.
+		version, err := resolvePseudoVersion(r.Context(), gwp.ImportPath, gwp.Version)
+		if err == nil && version != gwp.Version {
+			canonical := goWasmPrefix + gwp.ImportPath + "@" + version
+			http.Redirect(w, r, canonical, http.StatusFound)
+			return
+		}
+		if err != nil {
+			slog.Warn("could not resolve canonical version, building with original ref",
+				"import_path", gwp.ImportPath, "version", gwp.Version, "error", err)
 		}
 	}
 
