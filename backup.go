@@ -50,7 +50,11 @@ func backupRemote(client *http.Client, host, destDir string) error {
 		return err
 	}
 
-	m := &mapping{Entries: make(map[string]entry, len(items))}
+	// Merge: load existing local mapping, overlay remote entries
+	m, err := loadMapping(destDir)
+	if err != nil {
+		return err
+	}
 	for _, item := range items {
 		m.Entries[item.Path] = entry{SHA: item.SHA, Time: item.Time}
 	}
@@ -72,6 +76,11 @@ func backupRemote(client *http.Client, host, destDir string) error {
 		}
 		seen[item.SHA] = true
 
+		gzPath := blobPath(destDir, item.SHA, true)
+		if _, err := os.Stat(gzPath); err == nil {
+			continue // already exists locally
+		}
+
 		blobU, _ := url.Parse(host)
 		blobU.Path, _ = url.JoinPath(blobU.Path, blobRemotePath(item.SHA, true))
 		blobResp, err := blobClient.Get(blobU.String())
@@ -87,7 +96,6 @@ func backupRemote(client *http.Client, host, destDir string) error {
 			return fmt.Errorf("read blob %s: %v", item.SHA, readErr)
 		}
 
-		gzPath := blobPath(destDir, item.SHA, true)
 		if err := os.MkdirAll(filepath.Dir(gzPath), 0o755); err != nil {
 			return err
 		}
