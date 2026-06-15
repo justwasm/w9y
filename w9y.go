@@ -6,6 +6,8 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"mime"
@@ -45,20 +47,25 @@ func Run(args []string) error {
 		return usage()
 	}
 
+	var err error
 	switch args[0] {
 	case "upload":
-		return upload(args[1:])
+		err = upload(args[1:])
 	case "backup":
-		return backup(args[1:])
+		err = backup(args[1:])
 	case "restore":
-		return restore(args[1:])
+		err = restore(args[1:])
 	case "gc":
-		return gc(args[1:])
+		err = gc(args[1:])
 	case "-h", "--help", "help":
 		return usage()
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+	if errors.Is(err, flag.ErrHelp) {
+		return nil
+	}
+	return err
 }
 
 func usage() error {

@@ -14,13 +14,25 @@ import (
 
 func backup(args []string) error {
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
+	dataDir := fs.String("data-dir", "", "backup destination directory (default data)")
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), `usage: w9y backup [-data-dir data] [dest-dir]
+
+Backup all entries and blobs from remote server to a local directory.
+
+flags:
+  -data-dir  destination directory (default data)`)
+	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	host := defaultHost
 	destDir := fs.Arg(0)
 	if destDir == "" {
-		destDir = "backup-" + time.Now().Format("20060102-150405")
+		destDir = *dataDir
+	}
+	if destDir == "" {
+		destDir = "data"
 	}
 	return backupRemote(http.DefaultClient, host, destDir)
 }
@@ -52,6 +64,7 @@ func backupRemote(client *http.Client, host, destDir string) error {
 	if err != nil {
 		return err
 	}
+	fmt.Fprintf(os.Stderr, "fetched %d entries from remote\n", len(items))
 	for _, item := range items {
 		t, parseErr := time.Parse(time.RFC3339Nano, item.Time)
 		if parseErr != nil {
@@ -71,6 +84,7 @@ func backupRemote(client *http.Client, host, destDir string) error {
 	}
 
 	seen := make(map[string]bool, len(items))
+	var downloaded, skipped int
 	for _, item := range items {
 		if seen[item.SHA256] {
 			continue
@@ -79,6 +93,7 @@ func backupRemote(client *http.Client, host, destDir string) error {
 
 		gzPath := blobPath(destDir, item.SHA256, true)
 		if _, err := os.Stat(gzPath); err == nil {
+			skipped++
 			continue // already exists locally
 		}
 
@@ -103,6 +118,12 @@ func backupRemote(client *http.Client, host, destDir string) error {
 		if err := os.WriteFile(gzPath, gzData, 0o644); err != nil {
 			return err
 		}
+		fmt.Fprintf(os.Stderr, "downloaded blob/%s.wasm.gz (%.2f MB)\n", item.SHA256, float64(len(gzData))/(1024*1024))
+		downloaded++
+	}
+
+	if downloaded > 0 || skipped > 0 {
+		fmt.Fprintf(os.Stderr, "backup complete: %d downloaded, %d already present\n", downloaded, skipped)
 	}
 
 	return nil
