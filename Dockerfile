@@ -1,12 +1,13 @@
 FROM btwiuse/arch:golang AS build
 
+COPY . /src
 WORKDIR /src
-COPY go.mod ./
-COPY cmd ./cmd
-RUN go build -o /out/w9y ./cmd/w9y
+ENV CGO_ENABLED=0
+RUN go mod tidy
+RUN go build -o /bin/w9y ./cmd/w9y
 
-FROM btwiuse/arch:golang
+FROM btwiuse/arch
 
 WORKDIR /app
-COPY --from=build /out/w9y /usr/local/bin/w9y
+COPY --from=build /bin/w9y /bin/w9y
 CMD ["w9y"]
