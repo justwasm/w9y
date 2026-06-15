@@ -42,16 +42,45 @@ type BlobStore interface {
 	SetWithTime(path, hash string, time int64) error
 	SetBatch(entries map[string]Blob) error
 	List() (map[string]Blob, error)
+	DataDir() string
 }
 
 // NewBlobStore returns a file-based BlobStore backed by mapping.yaml in dataDir.
 func NewBlobStore(dataDir string) BlobStore {
-	return &fileBlobStore{dataDir: dataDir}
+	s := &fileBlobStore{dataDir: dataDir}
+	if err := s.loadCache(); err != nil {
+		s.cache = make(map[string]Blob)
+	}
+	return s
 }
+
+func (s *fileBlobStore) loadCache() error {
+	mappingPath := filepath.Join(s.dataDir, "mapping.yaml")
+	data, err := os.ReadFile(mappingPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			s.cache = make(map[string]Blob)
+			return nil
+		}
+		return err
+	}
+	var m struct {
+		Entries map[string]Blob `yaml:"entries"`
+	}
+	if err := yaml.Unmarshal(data, &m); err != nil {
+		return fmt.Errorf("corrupt mapping.yaml: %w", err)
+	}
+	if m.Entries == nil {
+		m.Entries = make(map[string]Blob)
+	}
+	s.cache = m.Entries
+	return nil
+} 
 
 type fileBlobStore struct {
 	dataDir string
 	mu      sync.RWMutex
+	cache   map[string]Blob // in-memory cache, nil = not yet loaded
 }
 
 func (s *fileBlobStore) Get(path string) (Blob, error) {
@@ -103,6 +132,8 @@ func (s *fileBlobStore) SetBatch(entries map[string]Blob) error {
 	return s.save(existing)
 }
 
+func (s *fileBlobStore) DataDir() string { return s.dataDir }
+
 func (s *fileBlobStore) List() (map[string]Blob, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -118,24 +149,11 @@ func (s *fileBlobStore) List() (map[string]Blob, error) {
 }
 
 func (s *fileBlobStore) load() (map[string]Blob, error) {
-	mappingPath := filepath.Join(s.dataDir, "mapping.yaml")
-	data, err := os.ReadFile(mappingPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return make(map[string]Blob), nil
-		}
-		return nil, err
+	result := make(map[string]Blob, len(s.cache))
+	for k, v := range s.cache {
+		result[k] = v
 	}
-	var m struct {
-		Entries map[string]Blob `yaml:"entries"`
-	}
-	if err := yaml.Unmarshal(data, &m); err != nil {
-		return nil, err
-	}
-	if m.Entries == nil {
-		m.Entries = make(map[string]Blob)
-	}
-	return m.Entries, nil
+	return result, nil
 }
 
 func (s *fileBlobStore) save(entries map[string]Blob) error {
@@ -150,7 +168,11 @@ func (s *fileBlobStore) save(entries map[string]Blob) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(mappingPath, data, 0o644)
+	if err := os.WriteFile(mappingPath, data, 0o644); err != nil {
+		return err
+	}
+	s.cache = entries
+	return nil
 }
 
 // Run starts server mode when the "server" subcommand is used,

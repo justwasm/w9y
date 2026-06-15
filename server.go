@@ -17,6 +17,7 @@ import (
 // NewServer returns the w9y HTTP handler.
 func NewServer(dataDir string) http.Handler {
 	store := NewBlobStore(dataDir)
+	builder := NewGoWasmBuilder(store)
 	return withCORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -36,7 +37,7 @@ func NewServer(dataDir string) http.Handler {
 
 		// Go WASM: build-on-demand from import path
 		if isGoWasmPath(remotePath) {
-			handleGoWasm(w, r, store, dataDir, remotePath)
+			handleGoWasm(w, r, builder, remotePath)
 			return
 		}
 
@@ -129,6 +130,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request, store BlobStore, dataD
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 100<<20) // 100 MB gzip body limit
 	tmpName, written, tmpErr := streamToTemp(gzDir, "*.wasm.gz", r.Body)
 	if tmpErr != nil {
 		http.Error(w, tmpErr.Error(), http.StatusBadRequest)

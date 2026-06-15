@@ -60,7 +60,7 @@ func parseGoWasmPath(remotePath string) (goWasmPath, bool) {
 	return goWasmPath{ImportPath: importPath, Version: version}, true
 }
 
-func handleGoWasm(w http.ResponseWriter, r *http.Request, store BlobStore, dataDir, remotePath string) {
+func handleGoWasm(w http.ResponseWriter, r *http.Request, builder *GoWasmBuilder, remotePath string) {
 	gwp, ok := parseGoWasmPath(remotePath)
 	if !ok {
 		http.NotFound(w, r)
@@ -96,12 +96,12 @@ func handleGoWasm(w http.ResponseWriter, r *http.Request, store BlobStore, dataD
 	}
 
 	// Concrete version — build or wait, then serve
-	sha, err := buildOrWait(store, dataDir, gwp.ImportPath, gwp.Version, remotePath, r.Context())
+	sha, err := builder.BuildOrWait(gwp.ImportPath, gwp.Version, remotePath, r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	gzPath := blobPath(dataDir, sha, true)
+	gzPath := blobPath(builder.DataDir(), sha, true)
 	serveGzipFile(w, r, gzPath)
 }
 
@@ -195,52 +195,59 @@ func listGoVersions(w http.ResponseWriter, r *http.Request, importPath string) {
 	})
 }
 
-// ---------------------------------------------------------------------------
-// Build deduplication — ensures only one build per remotePath at a time.
-// ---------------------------------------------------------------------------
-
 type buildResult struct {
 	sha string
 	err error
 }
 
-var (
-	buildsMu sync.Mutex
-	builds   = map[string][]chan buildResult{} // remotePath → waiters
-)
+// GoWasmBuilder builds Go WASM binaries on demand and deduplicates
+// concurrent builds for the same remotePath.
+type GoWasmBuilder struct {
+	BlobStore
+	mu     sync.Mutex
+	builds map[string][]chan buildResult // remotePath → waiters
+}
 
-// buildOrWait checks the cache first. If already built, returns immediately.
+// NewGoWasmBuilder creates a new GoWasmBuilder.
+func NewGoWasmBuilder(store BlobStore) *GoWasmBuilder {
+	return &GoWasmBuilder{
+		BlobStore: store,
+		builds:    make(map[string][]chan buildResult),
+	}
+}
+
+// BuildOrWait checks the cache first. If already built, returns immediately.
 // Otherwise, it either becomes the builder or waits for the in-flight build.
-func buildOrWait(store BlobStore, dataDir, importPath, version, remotePath string, reqCtx context.Context) (string, error) {
+func (b *GoWasmBuilder) BuildOrWait(importPath, version, remotePath string, reqCtx context.Context) (string, error) {
 	// Fast path: check mapping before taking any locks
-	if e, err := store.Get(remotePath); err == nil {
+	if e, err := b.Get(remotePath); err == nil {
 		return e.Hash, nil
 	}
 
 	ch := make(chan buildResult, 1)
 
-	buildsMu.Lock()
-	if waiters, exists := builds[remotePath]; exists {
+	b.mu.Lock()
+	if waiters, exists := b.builds[remotePath]; exists {
 		// Someone else is building — join their waitlist
-		builds[remotePath] = append(waiters, ch)
-		buildsMu.Unlock()
+		b.builds[remotePath] = append(waiters, ch)
+		b.mu.Unlock()
 
 		res := <-ch
 		return res.sha, res.err
 	}
 
 	// We are the builder
-	builds[remotePath] = []chan buildResult{ch}
-	buildsMu.Unlock()
+	b.builds[remotePath] = []chan buildResult{ch}
+	b.mu.Unlock()
 
 	// Do the build
-	sha, err := doBuildGoWasm(store, reqCtx, dataDir, importPath, version, remotePath)
+	sha, err := b.doBuild(reqCtx, importPath, version, remotePath)
 
 	// Collect all waiters and signal them
-	buildsMu.Lock()
-	waiters := builds[remotePath]
-	delete(builds, remotePath)
-	buildsMu.Unlock()
+	b.mu.Lock()
+	waiters := b.builds[remotePath]
+	delete(b.builds, remotePath)
+	b.mu.Unlock()
 
 	res := buildResult{sha: sha, err: err}
 	for _, w := range waiters {
@@ -252,7 +259,7 @@ func buildOrWait(store BlobStore, dataDir, importPath, version, remotePath strin
 // doBuildGoWasm runs the actual Go build, stores the result, and returns the SHA.
 // Uses go install with an isolated temp GOPATH, since go build pkg@version
 // is not supported — only go install and go get accept the @version syntax.
-func doBuildGoWasm(store BlobStore, reqCtx context.Context, dataDir, importPath, version, remotePath string) (string, error) {
+func (b *GoWasmBuilder) doBuild(reqCtx context.Context, importPath, version, remotePath string) (string, error) {
 	ctx, cancel := context.WithTimeout(reqCtx, 5*time.Minute)
 	defer cancel()
 
@@ -311,7 +318,7 @@ func doBuildGoWasm(store BlobStore, reqCtx context.Context, dataDir, importPath,
 	defer f.Close()
 
 	// Stream through gzip + sha256 simultaneously — no full []byte in memory
-	gzDir := filepath.Dir(blobPath(dataDir, "x", true))
+	gzDir := filepath.Dir(blobPath(b.DataDir(), "x", true))
 	if err := os.MkdirAll(gzDir, 0o755); err != nil {
 		return "", err
 	}
@@ -337,14 +344,14 @@ func doBuildGoWasm(store BlobStore, reqCtx context.Context, dataDir, importPath,
 	tmp.Close()
 
 	sha := hex.EncodeToString(h.Sum(nil))
-	gzPath := blobPath(dataDir, sha, true)
+	gzPath := blobPath(b.DataDir(), sha, true)
 	if err := os.Rename(tmpName, gzPath); err != nil {
 		os.Remove(tmpName)
 		return "", err
 	}
 
 	// Update mapping
-	if err := store.Set(remotePath, sha); err != nil {
+	if err := b.Set(remotePath, sha); err != nil {
 		return "", err
 	}
 
