@@ -163,6 +163,18 @@ func TestBlobPathServesDirectly(t *testing.T) {
 
 func TestRootListsEntriesSortedByTime(t *testing.T) {
 	dir := t.TempDir()
+
+	blobDir := filepath.Join(dir, "blob")
+	if err := os.MkdirAll(blobDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blobDir, "a.wasm.gz"), bytes.Repeat([]byte("x"), 1024*1024), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blobDir, "b.wasm.gz"), bytes.Repeat([]byte("y"), 1024*1024*2), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	m := &mapping{Entries: map[string]entry{
 		"/a.wasm": {SHA: "a", Time: 100},
 		"/b.wasm": {SHA: "b", Time: 200},
@@ -184,9 +196,10 @@ func TestRootListsEntriesSortedByTime(t *testing.T) {
 	}
 
 	var items []struct {
-		Path string `json:"path"`
-		SHA  string `json:"sha"`
-		Time int64  `json:"time"`
+		Path   string  `json:"path"`
+		SHA256 string  `json:"sha256"`
+		Time   string  `json:"time"`
+		Size   string  `json:"size"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&items); err != nil {
 		t.Fatalf("decode listing: %v", err)
@@ -194,11 +207,17 @@ func TestRootListsEntriesSortedByTime(t *testing.T) {
 	if len(items) != 2 {
 		t.Fatalf("listing count = %d, want 2", len(items))
 	}
-	if items[0].Path != "/b.wasm" || items[0].Time != 200 {
-		t.Fatalf("first item = %+v, want path=/b.wasm time=200", items[0])
+	if items[0].Path != "/b.wasm" || items[0].Time != "1970-01-01T00:00:00.2Z" {
+		t.Fatalf("first item = %+v, want path=/b.wasm time=1970-01-01T00:00:00.2Z", items[0])
 	}
-	if items[1].Path != "/a.wasm" || items[1].Time != 100 {
-		t.Fatalf("second item = %+v, want path=/a.wasm time=100", items[1])
+	if items[1].Path != "/a.wasm" || items[1].Time != "1970-01-01T00:00:00.1Z" {
+		t.Fatalf("second item = %+v, want path=/a.wasm time=1970-01-01T00:00:00.1Z", items[1])
+	}
+	if items[0].Size != "2.00MB" {
+		t.Fatalf("first item size = %q, want 2.00MB", items[0].Size)
+	}
+	if items[1].Size != "1.00MB" {
+		t.Fatalf("second item size = %q, want 1.00MB", items[1].Size)
 	}
 }
 

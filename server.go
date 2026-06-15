@@ -60,20 +60,31 @@ func handleList(w http.ResponseWriter, r *http.Request, dataDir string) {
 	}
 
 	type item struct {
-		Path string `json:"path"`
-		SHA  string `json:"sha"`
-		Time int64  `json:"time"`
+		Path   string `json:"path"`
+		SHA256 string `json:"sha256"`
+		Time   string `json:"time"`
+		Size   string `json:"size"`
+		epoch  int64
 	}
 	items := make([]item, 0, len(m.Entries))
 	for p, e := range m.Entries {
-		items = append(items, item{p, e.SHA, e.Time})
+		t := time.UnixMilli(e.Time).UTC().Format(time.RFC3339Nano)
+		fi, err := os.Stat(blobPath(dataDir, e.SHA, true))
+		var s string
+		if err == nil {
+			s = fmt.Sprintf("%.2fMB", float64(fi.Size())/(1024*1024))
+		} else {
+			s = "0.00MB"
+		}
+		items = append(items, item{Path: p, SHA256: e.SHA, Time: t, Size: s, epoch: e.Time})
 	}
 	sort.Slice(items, func(i, j int) bool {
-		return items[i].Time > items[j].Time
+		return items[i].epoch > items[j].epoch
 	})
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	json.NewEncoder(w).Encode(items)
+	enc, _ := json.MarshalIndent(items, "", "  ")
+	w.Write(enc)
 }
 
 func handleUpload(w http.ResponseWriter, r *http.Request, dataDir, remotePath string) {
