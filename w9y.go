@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -17,17 +18,23 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
-const (
-	defaultDataDir = "data"
+const defaultDataDir = "data"
 
-	headerBlobSHA256 = "X-W9Y-Blob-SHA256"
-	headerLinkOnly   = "X-W9Y-Link-Only"
-)
+type entry struct {
+	SHA  string `yaml:"sha" json:"sha"`
+	Time int64  `yaml:"time" json:"time"`
+}
+
+type mapping struct {
+	Entries map[string]entry `yaml:"entries"`
+}
 
 // Run starts server mode when PORT is set, otherwise it runs the CLI.
 func Run(args []string) error {
@@ -88,7 +95,12 @@ func uploadWithClient(args []string, client *http.Client) error {
 	if remotePath == "" {
 		remotePath = "/" + filepath.Base(fileName)
 	}
-	remotePath, err := cleanUploadPath(remotePath)
+
+	wasm, err := os.ReadFile(fileName)
+	if err != nil {
+		return err
+	}
+	gz, err := gzipBytes(wasm)
 	if err != nil {
 		return err
 	}
@@ -97,47 +109,17 @@ func uploadWithClient(args []string, client *http.Client) error {
 	if host == "" {
 		return errors.New("HOST is required for upload")
 	}
-
-	wasm, err := os.ReadFile(fileName)
-	if err != nil {
-		return err
-	}
-	sum := sha256.Sum256(wasm)
-	sha := hex.EncodeToString(sum[:])
-
-	blobPath := blobRemotePath(sha, true)
-	exists, err := remoteExists(client, host, blobPath)
-	if err != nil {
-		return err
-	}
-
-	var body io.Reader
-	linkOnly := exists
-	if linkOnly {
-		body = http.NoBody
-	} else {
-		gz, err := gzipBytes(wasm)
-		if err != nil {
-			return err
-		}
-		body = bytes.NewReader(gz)
-	}
-
 	endpoint, err := joinEndpoint(host, remotePath)
 	if err != nil {
 		return err
 	}
 
-	req, err := http.NewRequest(http.MethodPut, endpoint, body)
+	req, err := http.NewRequest(http.MethodPut, endpoint, bytes.NewReader(gz))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/gzip")
 	req.Header.Set("Content-Encoding", "gzip")
-	req.Header.Set(headerBlobSHA256, sha)
-	if linkOnly {
-		req.Header.Set(headerLinkOnly, "1")
-	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -145,36 +127,12 @@ func uploadWithClient(args []string, client *http.Client) error {
 	}
 	defer resp.Body.Close()
 
-	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("upload failed: %s: %s", resp.Status, strings.TrimSpace(string(bodyBytes)))
+		return fmt.Errorf("upload failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
-	fmt.Printf("%s\n", strings.TrimSpace(string(bodyBytes)))
+	fmt.Printf("%s\n", strings.TrimSpace(string(body)))
 	return nil
-}
-
-func remoteExists(client *http.Client, host, remotePath string) (bool, error) {
-	endpoint, err := joinEndpoint(host, remotePath)
-	if err != nil {
-		return false, err
-	}
-	req, err := http.NewRequest(http.MethodHead, endpoint, nil)
-	if err != nil {
-		return false, err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusOK:
-		return true, nil
-	case http.StatusNotFound:
-		return false, nil
-	default:
-		return false, fmt.Errorf("blob check failed: %s", resp.Status)
-	}
 }
 
 func backup(args []string) error {
@@ -332,6 +290,11 @@ func NewServer(dataDir string) http.Handler {
 			return
 		}
 
+		if remotePath == "/" {
+			handleList(w, r, dataDir)
+			return
+		}
+
 		switch r.Method {
 		case http.MethodPut, http.MethodPost:
 			handleUpload(w, r, dataDir, remotePath)
@@ -347,43 +310,65 @@ func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, PUT, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Encoding, "+headerBlobSHA256+", "+headerLinkOnly)
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		next.ServeHTTP(w, r)
 	})
 }
 
-func handleUpload(w http.ResponseWriter, r *http.Request, dataDir, remotePath string) {
-	remotePath, err := cleanUploadPath(remotePath)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	sha := r.Header.Get(headerBlobSHA256)
-	if !validSHA256(sha) {
-		http.Error(w, headerBlobSHA256+" is required", http.StatusBadRequest)
-		return
-	}
-
-	gzPath := blobPath(dataDir, sha, true)
-	if _, err := os.Stat(gzPath); os.IsNotExist(err) {
-		if r.Header.Get(headerLinkOnly) == "1" {
-			http.Error(w, "blob not found", http.StatusNotFound)
-			return
-		}
-		if err := storeCompressedBlob(dataDir, sha, r.Body); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-	}
-
-	mapping, err := loadMapping(dataDir)
+func handleList(w http.ResponseWriter, r *http.Request, dataDir string) {
+	m, err := loadMapping(dataDir)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	mapping[remotePath] = sha
-	if err := saveMapping(dataDir, mapping); err != nil {
+
+	type item struct {
+		Path string `json:"path"`
+		SHA  string `json:"sha"`
+		Time int64  `json:"time"`
+	}
+	items := make([]item, 0, len(m.Entries))
+	for p, e := range m.Entries {
+		items = append(items, item{p, e.SHA, e.Time})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].Time > items[j].Time
+	})
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(items)
+}
+
+func handleUpload(w http.ResponseWriter, r *http.Request, dataDir, remotePath string) {
+	if isBlobRemotePath(remotePath) {
+		http.Error(w, "uploads to /blob are not allowed", http.StatusBadRequest)
+		return
+	}
+
+	gz, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	sha := sha256Hex(gz)
+
+	gzPath := blobPath(dataDir, sha, true)
+	if err := os.MkdirAll(filepath.Dir(gzPath), 0o755); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := os.WriteFile(gzPath, gz, 0o644); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	m, err := loadMapping(dataDir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	m.Entries[remotePath] = entry{SHA: sha, Time: time.Now().UnixMilli()}
+	if err := saveMapping(dataDir, m); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -401,17 +386,17 @@ func handleDownload(w http.ResponseWriter, r *http.Request, dataDir, remotePath 
 		return
 	}
 
-	mapping, err := loadMapping(dataDir)
+	m, err := loadMapping(dataDir)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	sha, ok := mapping[remotePath]
+	e, ok := m.Entries[remotePath]
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	gzPath := blobPath(dataDir, sha, true)
+	gzPath := blobPath(dataDir, e.SHA, true)
 	serveGzipFile(w, r, gzPath)
 }
 
@@ -433,7 +418,6 @@ func serveGzipFile(w http.ResponseWriter, r *http.Request, gzPath string) {
 		return
 	}
 
-	// Determine the virtual path for content type (strip .gz)
 	virtualPath := strings.TrimSuffix(gzPath, ".gz")
 	w.Header().Set("Content-Type", contentType(virtualPath))
 	w.Header().Set("Content-Encoding", "gzip")
@@ -441,67 +425,35 @@ func serveGzipFile(w http.ResponseWriter, r *http.Request, gzPath string) {
 	http.ServeContent(w, r, path.Base(virtualPath)+".gz", stat.ModTime(), file)
 }
 
-func loadMapping(dataDir string) (map[string]string, error) {
+func loadMapping(dataDir string) (*mapping, error) {
 	mappingPath := filepath.Join(dataDir, "mapping.yaml")
 	data, err := os.ReadFile(mappingPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return make(map[string]string), nil
+			return &mapping{Entries: make(map[string]entry)}, nil
 		}
 		return nil, err
 	}
-	var m map[string]string
+	var m mapping
 	if err := yaml.Unmarshal(data, &m); err != nil {
 		return nil, err
 	}
-	if m == nil {
-		m = make(map[string]string)
+	if m.Entries == nil {
+		m.Entries = make(map[string]entry)
 	}
-	return m, nil
+	return &m, nil
 }
 
-func saveMapping(dataDir string, mapping map[string]string) error {
+func saveMapping(dataDir string, m *mapping) error {
 	mappingPath := filepath.Join(dataDir, "mapping.yaml")
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return err
 	}
-	data, err := yaml.Marshal(mapping)
+	data, err := yaml.Marshal(m)
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(mappingPath, data, 0o644)
-}
-
-func storeCompressedBlob(dataDir, sha string, body io.Reader) error {
-	gzPath := blobPath(dataDir, sha, true)
-	if err := os.MkdirAll(filepath.Dir(gzPath), 0o755); err != nil {
-		return err
-	}
-
-	var gz bytes.Buffer
-	tee := io.TeeReader(body, &gz)
-	gr, err := gzip.NewReader(tee)
-	if err != nil {
-		return fmt.Errorf("invalid gzip body: %w", err)
-	}
-	hasher := sha256.New()
-	if _, err := io.Copy(hasher, gr); err != nil {
-		gr.Close()
-		return err
-	}
-	if err := gr.Close(); err != nil {
-		return err
-	}
-	if _, err := io.Copy(&gz, body); err != nil {
-		return err
-	}
-
-	got := hex.EncodeToString(hasher.Sum(nil))
-	if got != sha {
-		return fmt.Errorf("sha256 mismatch: got %s, want %s", got, sha)
-	}
-
-	return os.WriteFile(gzPath, gz.Bytes(), 0o644)
 }
 
 func gzipBytes(src []byte) ([]byte, error) {
@@ -518,17 +470,6 @@ func gzipBytes(src []byte) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
-}
-
-func cleanUploadPath(remotePath string) (string, error) {
-	clean, err := cleanRemotePath(remotePath)
-	if err != nil {
-		return "", err
-	}
-	if isBlobRemotePath(clean) {
-		return "", errors.New("uploads to /blob are not allowed")
-	}
-	return clean, nil
 }
 
 func cleanRemotePath(remotePath string) (string, error) {
@@ -566,12 +507,9 @@ func isBlobRemotePath(remotePath string) bool {
 	return remotePath == "/blob" || strings.HasPrefix(remotePath, "/blob/")
 }
 
-func validSHA256(value string) bool {
-	if len(value) != sha256.Size*2 {
-		return false
-	}
-	_, err := hex.DecodeString(value)
-	return err == nil
+func sha256Hex(body []byte) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
 }
 
 func contentType(remotePath string) string {
@@ -585,11 +523,7 @@ func contentType(remotePath string) string {
 }
 
 func joinEndpoint(host, remotePath string) (string, error) {
-	u, err := url.JoinPath(host, remotePath)
-	if err != nil {
-		return "", err
-	}
-	return u, nil
+	return url.JoinPath(host, remotePath)
 }
 
 func getenv(key, fallback string) string {

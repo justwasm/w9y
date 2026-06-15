@@ -61,7 +61,7 @@ HOST=http://localhost:8080 w9y upload --to /bar.wasm foo.wasm
 
 `--to /bar.wasm` must come before the filepath. w9y uses Go's standard flag parser, which stops parsing flags after the first positional argument.
 
-The client hashes and gzips the wasm before uploading. It checks `HEAD /blob/<sha256>.wasm.gz` first; if the blob already exists, it only updates the mapping and does not upload the bytes again.
+The client gzips the wasm file and sends it as the PUT body. No custom headers or pre-flight checks are needed.
 
 ## Serving
 
