@@ -4,10 +4,10 @@ w9y is a WebAssembly blob hosting service with content-addressed storage and aut
 
 Upload a `.wasm` file once, then serve any named `.wasm` path with gzip compression. The path is mapped to a deduplicated blob store via `mapping.yaml`, so multiple public paths can point at the same uploaded bytes. CORS is enabled by default, and no authentication is required yet.
 
-## Build
+## Install
 
 ```sh
-go build ./cmd/w9y
+go install github.com/btwiuse/w9y/cmd/w9y@latest
 ```
 
 ## Server

@@ -528,6 +528,79 @@ func TestNotFoundReturns404(t *testing.T) {
 	}
 }
 
+func TestParseGoWasmPath(t *testing.T) {
+	tests := []struct {
+		remotePath      string
+		wantImportPath  string
+		wantVersion     string
+		wantOK          bool
+	}{
+		{"/go/github.com/btwiuse/w9y/cmd/w9y@v0.1.0", "github.com/btwiuse/w9y/cmd/w9y", "v0.1.0", true},
+		{"/go/github.com/btwiuse/w9y/cmd/w9y@latest", "github.com/btwiuse/w9y/cmd/w9y", "latest", true},
+		{"/go/github.com/btwiuse/w9y/cmd/w9y", "github.com/btwiuse/w9y/cmd/w9y", "", true},
+		{"/go/github.com/btwiuse/w9y", "github.com/btwiuse/w9y", "", true},
+		{"/go/", "", "", false},
+		{"/go/@v0.1.0", "", "", false}, // empty import path
+	}
+	for _, tt := range tests {
+		got, ok := parseGoWasmPath(tt.remotePath)
+		if ok != tt.wantOK {
+			t.Errorf("parseGoWasmPath(%q) ok = %v, want %v", tt.remotePath, ok, tt.wantOK)
+		}
+		if got.ImportPath != tt.wantImportPath {
+			t.Errorf("parseGoWasmPath(%q) ImportPath = %q, want %q", tt.remotePath, got.ImportPath, tt.wantImportPath)
+		}
+		if got.Version != tt.wantVersion {
+			t.Errorf("parseGoWasmPath(%q) Version = %q, want %q", tt.remotePath, got.Version, tt.wantVersion)
+		}
+	}
+}
+
+func TestGoWasmPathReturnsInfoWhenNoVersion(t *testing.T) {
+	dir := t.TempDir()
+	server := NewServer(dir)
+
+	// No version specified — should return informative message, not 404
+	req := httptest.NewRequest(http.MethodGet, "/go/github.com/btwiuse/w9y", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "@<version>") && !strings.Contains(body, "version") {
+		t.Fatalf("expected version prompt, got: %s", body)
+	}
+}
+
+func TestGoWasmPathWithLatestReturnsInfo(t *testing.T) {
+	dir := t.TempDir()
+	server := NewServer(dir)
+
+	req := httptest.NewRequest(http.MethodGet, "/go/github.com/btwiuse/w9y@latest", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestGoWasmPathReturns404ForBadPath(t *testing.T) {
+	dir := t.TempDir()
+	server := NewServer(dir)
+
+	// Empty import path
+	req := httptest.NewRequest(http.MethodGet, "/go/", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
 func mustGzip(t *testing.T, body []byte) []byte {
 	t.Helper()
 	gz, err := gzipBytes(body)

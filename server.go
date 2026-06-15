@@ -35,6 +35,12 @@ func NewServer(dataDir string) http.Handler {
 			return
 		}
 
+		// Go WASM: build-on-demand from import path
+		if isGoWasmPath(remotePath) {
+			handleGoWasm(w, r, dataDir, remotePath)
+			return
+		}
+
 		switch r.Method {
 		case http.MethodPut, http.MethodPost:
 			handleUpload(w, r, dataDir, remotePath)
