@@ -4,4 +4,8 @@ curl -sL https://github.com/justwasm/go/releases/download/go1.27.0-wanix.6/go1.2
 
 export PATH=/go/bin:$PATH
 
+export CGO_ENABLED=0
+
+export GONOSUMDB='*'
+
 w9y server
