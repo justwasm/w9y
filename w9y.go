@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"mime"
 	"net/http"
 	"net/url"
@@ -76,11 +77,7 @@ func (s *fileBlobStore) loadCache() error {
 	}
 
 	// drop entries with empty hash (e.g. from an old format migration)
-	for k, v := range m.Entries {
-		if v.Hash == "" {
-			delete(m.Entries, k)
-		}
-	}
+	maps.DeleteFunc(m.Entries, func(_ string, v Blob) bool { return v.Hash == "" })
 
 	s.cache = m.Entries
 	return nil
@@ -130,10 +127,7 @@ func (s *fileBlobStore) DataDir() string { return s.dataDir }
 func (s *fileBlobStore) List() (map[string]Blob, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	result := make(map[string]Blob, len(s.cache))
-	for k, v := range s.cache {
-		result[k] = v
-	}
+	result := maps.Clone(s.cache)
 	return result, nil
 }
 
@@ -165,7 +159,7 @@ func NewRootCommand() *cobra.Command {
 automatic gzip serving, and on-demand Go WASM builds.`,
 	}
 
-	root.PersistentFlags().StringVar(&dataDir, "data-dir", getenv("DATA_DIR", defaultDataDir), "data directory")
+	root.PersistentFlags().StringVar(&dataDir, "data-dir", cmp.Or(os.Getenv("DATA_DIR"), defaultDataDir), "data directory")
 
 	root.AddCommand(newServerCommand())
 	root.AddCommand(newUploadCommand())
@@ -274,13 +268,6 @@ func contentType(remotePath string) string {
 		return typ
 	}
 	return "application/octet-stream"
-}
-
-func getenv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }
 
 // streamToTemp streams body into a temp file in dir, closes the file,

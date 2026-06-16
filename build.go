@@ -107,7 +107,7 @@ func resolveSpec(ctx context.Context, importPath, version string) (resolvedSpec,
 func buildFromSource(ctx context.Context, spec resolvedSpec, tmpDir string) (string, error) {
 	// Copy module source from cache to tmpdir (cache is often read-only)
 	modDir := filepath.Join(tmpDir, "mod")
-	if err := copyDir(spec.Dir, modDir); err != nil {
+	if err := os.CopyFS(modDir, os.DirFS(spec.Dir)); err != nil {
 		return "", fmt.Errorf("copy module source: %w", err)
 	}
 
@@ -159,28 +159,6 @@ func buildFromSource(ctx context.Context, spec resolvedSpec, tmpDir string) (str
 	}
 
 	return wasmPath, nil
-}
-
-// copyDir recursively copies a directory tree from src to dst.
-func copyDir(src, dst string) error {
-	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		dest := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return os.MkdirAll(dest, 0o755)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(dest, data, 0o644)
-	})
 }
 
 func runBuild(spec string) error {

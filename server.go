@@ -1,6 +1,7 @@
 package w9y
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,7 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -89,8 +90,8 @@ func handleList(w http.ResponseWriter, store BlobStore, dataDir string) {
 		}
 		items = append(items, item{Path: p, Hash: e.Hash, Time: t, Size: s, epoch: e.Time})
 	}
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].epoch > items[j].epoch
+	slices.SortFunc(items, func(a, b item) int {
+		return cmp.Compare(b.epoch, a.epoch)
 	})
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -274,7 +275,7 @@ func newServerCommand() *cobra.Command {
 			return http.ListenAndServe(addr, NewServer(dataDir))
 		},
 	}
-	cmd.Flags().StringVar(&port, "port", getenv("PORT", "8080"), "server port")
+	cmd.Flags().StringVar(&port, "port", cmp.Or(os.Getenv("PORT"), "8080"), "server port")
 	cmd.Flags().BoolVar(&doCheck, "check", false, "run blob integrity check on startup")
 	return cmd
 }

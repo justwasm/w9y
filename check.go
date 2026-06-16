@@ -1,6 +1,7 @@
 package w9y
 
 import (
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
@@ -75,10 +76,8 @@ func verifyBlob(path, wantSHA string) error {
 	if _, err := io.ReadFull(gr, magic); err != nil {
 		return fmt.Errorf("read magic: %w", err)
 	}
-	for i, b := range wasmMagic {
-		if magic[i] != b {
-			return fmt.Errorf("bad magic: got %02x, want %02x (not a WASM binary)", magic, wasmMagic)
-		}
+	if !bytes.Equal(magic, wasmMagic) {
+		return fmt.Errorf("bad magic: got %02x, want %02x (not a WASM binary)", magic, wasmMagic)
 	}
 
 	// Stream the full content (including magic bytes) through SHA256
