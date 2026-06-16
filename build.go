@@ -116,6 +116,25 @@ func buildFromSource(ctx context.Context, spec resolvedSpec, tmpDir string) (str
 		return "", fmt.Errorf("copy module source: %w", err)
 	}
 
+	// Run go mod edit -replace before tidy to swap clipboard fork
+	replaceCtx, replaceCancel := context.WithTimeout(ctx, 1*time.Minute)
+	defer replaceCancel()
+
+	slog.Info("go mod edit -replace", "dir", modDir)
+	replaceCmd := exec.CommandContext(replaceCtx, "go", "mod", "edit",
+		"-replace", "github.com/atotto/clipboard=github.com/justwasm/clipboard@v0.1.6",
+		"-replace", "charm.land/bubbletea/v2=github.com/bubbletui/bubbletea/v2@v2.0.8")
+	replaceCmd.Dir = modDir
+	replaceCmd.Env = append(os.Environ(), "GOWORK=off")
+	replaceCmd.Stderr = new(bytes.Buffer)
+	if err := replaceCmd.Run(); err != nil {
+		stderr := replaceCmd.Stderr.(*bytes.Buffer).String()
+		if stderr != "" {
+			fmt.Fprint(os.Stderr, stderr)
+		}
+		return "", fmt.Errorf("go mod edit -replace: %w", err)
+	}
+
 	// Run go mod tidy to resolve dependencies and generate go.sum
 	tidyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
