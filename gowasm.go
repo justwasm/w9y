@@ -67,32 +67,23 @@ func handleGoWasm(w http.ResponseWriter, r *http.Request, builder *GoWasmBuilder
 		return
 	}
 
-	// "latest" or empty → try to resolve to a concrete version and redirect.
-	// If resolution fails (e.g. no network access to proxy), build @latest directly.
-	if gwp.Version == "" || gwp.Version == "latest" {
-		version, err := resolvePseudoVersion(r.Context(), gwp.ImportPath, "latest")
-		if err == nil {
-			canonical := goWasmPrefix + gwp.ImportPath + "@" + version
-			http.Redirect(w, r, canonical, http.StatusFound)
-			return
-		}
-		slog.Warn("could not resolve latest version, building @latest directly",
-			"import_path", gwp.ImportPath, "error", err)
-		gwp.Version = "latest"
-		remotePath = goWasmPrefix + gwp.ImportPath + "@latest"
-	} else if !isPseudoVersion(gwp.Version) {
-		// Non-canonical reference (commit hash, branch name) — try to resolve to
-		// a canonical pseudo-version for cleaner mapping paths. Best-effort.
-		version, err := resolvePseudoVersion(r.Context(), gwp.ImportPath, gwp.Version)
-		if err == nil && version != gwp.Version {
-			canonical := goWasmPrefix + gwp.ImportPath + "@" + version
-			http.Redirect(w, r, canonical, http.StatusFound)
-			return
-		}
-		if err != nil {
-			slog.Warn("could not resolve canonical version, building with original ref",
-				"import_path", gwp.ImportPath, "version", gwp.Version, "error", err)
-		}
+	// Empty version → list versions
+	if gwp.Version == "" {
+		listGoVersions(w, r, gwp.ImportPath)
+		return
+	}
+
+	// Best-effort resolution to canonical version
+	resolved, err := resolveSpec(r.Context(), gwp.ImportPath, gwp.Version)
+	if err == nil && resolved.Version != gwp.Version {
+		// Redirect to canonical form
+		canonical := goWasmPrefix + gwp.ImportPath + "@" + resolved.Version
+		http.Redirect(w, r, canonical, http.StatusFound)
+		return
+	}
+	if err != nil {
+		slog.Warn("could not resolve version, building with original ref",
+			"import_path", gwp.ImportPath, "version", gwp.Version, "error", err)
 	}
 
 	// Concrete version — build or wait, then serve
@@ -105,65 +96,7 @@ func handleGoWasm(w http.ResponseWriter, r *http.Request, builder *GoWasmBuilder
 	serveFile(w, r, gzPath, true)
 }
 
-// isPseudoVersion reports whether s is an already-canonical Go module version
-// — either a semver tag (v0.28.1) or a pseudo-version (v0.0.0-20260615105154-368618324f3e).
-// Non-canonical refs (commit hashes, branch names) trigger resolution via go list.
-func isPseudoVersion(s string) bool {
-	if len(s) < 5 || s[0] != 'v' {
-		return false
-	}
-	// Check it starts with v<major>.<minor>.<patch>
-	dots := 0
-	for i := 1; i < len(s); i++ {
-		c := s[i]
-		if c == '.' {
-			dots++
-			continue
-		}
-		if c < '0' || c > '9' {
-			return dots >= 2
-		}
-	}
-	return dots >= 2
-}
-
-// resolvePseudoVersion resolves a commit hash to a Go pseudo-version
-// via "go list -m -json <importPath>@<commit>".
-// It first resolves the module root from the import path, because
-// go list -m expects module paths, not package paths.
-func resolvePseudoVersion(ctx context.Context, importPath, commit string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	// Resolve module root first — go list -m needs a module path, not a package path
-	modPath, err := moduleRoot(ctx, importPath)
-	if err != nil {
-		return "", fmt.Errorf("resolve module root for %s: %w", importPath, err)
-	}
-
-	cmd := exec.CommandContext(ctx, "go", "list", "-m", "-json", modPath+"@"+commit)
-	cmd.Env = append(os.Environ(), "GOWORK=off")
-	out, err := cmd.Output()
-	if err != nil {
-		var stderr string
-		if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
-			stderr = ": " + strings.TrimSpace(string(exitErr.Stderr))
-		}
-		return "", fmt.Errorf("resolve %s@%s%s", modPath, commit, stderr)
-	}
-
-	var info struct {
-		Version string `json:"Version"`
-	}
-	if err := json.Unmarshal(out, &info); err != nil {
-		return "", fmt.Errorf("parse module info: %w", err)
-	}
-	if info.Version == "" {
-		return "", fmt.Errorf("no version found for %s@%s", importPath, commit)
-	}
-	return info.Version, nil
-}
-
+// listGoVersions handles the /go/<import-path> endpoint (no version specified).
 func listGoVersions(w http.ResponseWriter, r *http.Request, importPath string) {
 	// First, resolve the module root from the import path
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
@@ -281,6 +214,7 @@ func (b *GoWasmBuilder) doBuild(reqCtx context.Context, importPath, version, rem
 	}
 	defer os.RemoveAll(tmpDir)
 
+	// Build directly — version is already canonical at this point
 	pkg := importPath + "@" + version
 
 	slog.Info("building Go WASM",

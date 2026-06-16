@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/mod/semver"
 )
 
 func newBuildCommand() *cobra.Command {
@@ -34,6 +35,53 @@ Examples:
 	return cmd
 }
 
+// resolvedSpec holds the three components of a resolved build spec.
+type resolvedSpec struct {
+	Pkg     string // original package import path (e.g. "github.com/btwiuse/w9y/cmd/w9y")
+	ModPath string // resolved module path (e.g. "github.com/btwiuse/w9y")
+	Version string // resolved canonical version (e.g. "v0.0.0-20260616064018-2314db5ec7ed")
+}
+
+// resolveSpec resolves a non-canonical version reference (commit hash, branch
+// name, "latest") to a canonical Go module version. It tries progressively
+// shorter import paths, following go get's module resolution logic.
+//
+// If version is already a valid semver, pkg and modPath both equal the input.
+func resolveSpec(ctx context.Context, pkg, version string) (resolvedSpec, error) {
+	if version == "" {
+		version = "latest"
+	}
+
+	// Already canonical — no resolution needed
+	if semver.IsValid(version) {
+		return resolvedSpec{Pkg: pkg, ModPath: pkg, Version: version}, nil
+	}
+
+	// Try progressively shorter import paths
+	parts := strings.Split(pkg, "/")
+	for i := len(parts); i >= 1; i-- {
+		modPath := strings.Join(parts[:i], "/")
+		spec := modPath + "@" + version
+		cmd := exec.CommandContext(ctx, "go", "list", "-m", "-f", "{{.Version}}", spec)
+		cmd.Env = append(os.Environ(), "GOWORK=off")
+		var stderrBuf bytes.Buffer
+		cmd.Stderr = &stderrBuf
+		out, err := cmd.Output()
+		if err != nil {
+			if stderr := stderrBuf.String(); stderr != "" {
+				fmt.Fprintf(os.Stderr, "go list -m -f {{.Version}} %s:\n%s", spec, stderr)
+			}
+			continue
+		}
+		ver := strings.TrimSpace(string(out))
+		if ver != "" && semver.IsValid(ver) {
+			return resolvedSpec{Pkg: pkg, ModPath: modPath, Version: ver}, nil
+		}
+	}
+
+	return resolvedSpec{}, fmt.Errorf("could not resolve %s@%s", pkg, version)
+}
+
 func runBuild(spec string) error {
 	importPath, version, ok := strings.Cut(spec, "@")
 	if !ok || importPath == "" {
@@ -47,21 +95,16 @@ func runBuild(spec string) error {
 	defer cancel()
 
 	// Best-effort version resolution
-	if version == "latest" {
-		v, err := resolvePseudoVersion(ctx, importPath, "latest")
-		if err == nil {
-			version = v
-		} else {
-			slog.Warn("could not resolve latest, building @latest directly", "error", err)
+	resolved, err := resolveSpec(ctx, importPath, version)
+	if err == nil {
+		if resolved.Version != version {
+			slog.Info("resolved version",
+				"pkg", importPath, "module", resolved.ModPath,
+				"from", version, "to", resolved.Version)
 		}
-	} else if !isPseudoVersion(version) {
-		v, err := resolvePseudoVersion(ctx, importPath, version)
-		if err == nil && v != version {
-			slog.Info("resolved to canonical version", "from", version, "to", v)
-			version = v
-		} else if err != nil {
-			slog.Warn("could not resolve canonical version, building with original ref", "original", version, "error", err)
-		}
+		version = resolved.Version
+	} else {
+		slog.Warn("could not resolve version, building with original ref", "spec", spec, "error", err)
 	}
 
 	// Build
