@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"golang.org/x/mod/semver"
 )
 
 func newBuildCommand() *cobra.Command {
@@ -36,108 +35,86 @@ Examples:
 	return cmd
 }
 
-// resolvedSpec holds the three components of a resolved build spec.
+// resolvedSpec holds the components of a resolved build spec.
 type resolvedSpec struct {
 	Pkg     string // module import path (e.g. "github.com/btwiuse/w9y")
 	Path    string // subpackage path within the module (e.g. "cmd/w9y")
 	Version string // resolved canonical version (e.g. "v0.0.0-20260616064018-2314db5ec7ed")
+	Dir     string // cached module directory from go mod download
 }
 
-// importPath returns the full package import path (pkg + "/" + path).
-func (r resolvedSpec) importPath() string {
-	if r.Path == "" {
-		return r.Pkg
-	}
-	return r.Pkg + "/" + r.Path
-}
-
-// resolveSpec resolves a non-canonical version reference (commit hash, branch
-// name, "latest") to a canonical Go module version. It tries progressively
-// shorter import paths, following go get's module resolution logic.
-//
-// If version is already a valid semver, path is empty and pkg equals the input.
-func resolveSpec(ctx context.Context, pkg, version string) (resolvedSpec, error) {
+// resolveSpec resolves a non-canonical version reference (commit hash, branch,
+// "latest") to a canonical Go module version and downloads the module to the
+// Go module cache in a single step. It tries progressively shorter import
+// paths via go mod download -json, following go get's module resolution logic.
+func resolveSpec(ctx context.Context, importPath, version string) (resolvedSpec, error) {
 	if version == "" {
 		version = "latest"
 	}
 
-	// Already canonical — no resolution needed
-	if semver.IsValid(version) {
-		return resolvedSpec{Pkg: pkg, Path: "", Version: version}, nil
-	}
-
-	// Try progressively shorter import paths
-	parts := strings.Split(pkg, "/")
+	// Try progressively shorter import paths via go mod download -json.
+	// This resolves the version and downloads the module in one call.
+	parts := strings.Split(importPath, "/")
 	for i := len(parts); i >= 1; i-- {
 		modPath := strings.Join(parts[:i], "/")
 		spec := modPath + "@" + version
-		cmd := exec.CommandContext(ctx, "go", "list", "-m", "-f", "{{.Version}}", spec)
+
+		cmd := exec.CommandContext(ctx, "go", "mod", "download", "-json", spec)
 		cmd.Env = append(os.Environ(), "GOWORK=off")
 		var stderrBuf bytes.Buffer
 		cmd.Stderr = &stderrBuf
 		out, err := cmd.Output()
 		if err != nil {
 			if stderr := stderrBuf.String(); stderr != "" {
-				fmt.Fprintf(os.Stderr, "go list -m -f {{.Version}} %s:\n%s", spec, stderr)
+				fmt.Fprintf(os.Stderr, "go mod download -json %s:\n%s", spec, stderr)
 			}
 			continue
 		}
-		ver := strings.TrimSpace(string(out))
-		if ver != "" && semver.IsValid(ver) {
-			// The subpackage path is whatever remains after stripping the module root
-			sub := strings.TrimPrefix(pkg, modPath+"/")
-			if sub == pkg {
-				sub = "" // pkg == modPath (no subpackage)
-			}
-			return resolvedSpec{Pkg: modPath, Path: sub, Version: ver}, nil
+
+		var info struct {
+			Path    string `json:"Path"`
+			Version string `json:"Version"`
+			Dir     string `json:"Dir"`
 		}
+		if err := json.Unmarshal(out, &info); err != nil {
+			continue
+		}
+		if info.Version == "" || info.Dir == "" {
+			continue
+		}
+
+		// Subpackage path is whatever remains after stripping the module root
+		sub := strings.TrimPrefix(importPath, modPath+"/")
+		if sub == importPath {
+			sub = ""
+		}
+
+		return resolvedSpec{
+			Pkg:     info.Path,
+			Path:    sub,
+			Version: info.Version,
+			Dir:     info.Dir,
+		}, nil
 	}
 
-	return resolvedSpec{}, fmt.Errorf("could not resolve %s@%s", pkg, version)
+	return resolvedSpec{}, fmt.Errorf("could not resolve %s@%s", importPath, version)
 }
 
-// buildFromSource downloads the module via go mod download, copies it to a
-// writable tmpdir, runs go mod tidy, and builds with go build. This approach
-// avoids go install's restriction on replace directives in dependency go.mod
-// files, because the module is treated as the main module during build.
+// buildFromSource copies the already-downloaded module from the Go module cache
+// to a writable tmpdir, runs go mod tidy, then builds with go build GOOS=js
+// GOARCH=wasm. This approach treats the module as the main module, so replace
+// directives in go.mod are honored (unlike go install which rejects them).
 func buildFromSource(ctx context.Context, spec resolvedSpec, tmpDir string) (string, error) {
-	modSpec := spec.Pkg + "@" + spec.Version
-
-	// 1. Download module to Go's module cache
-	slog.Info("downloading module", "spec", modSpec)
-	downloadCmd := exec.CommandContext(ctx, "go", "mod", "download", "-json", modSpec)
-	downloadCmd.Env = append(os.Environ(), "GOWORK=off")
-	downloadCmd.Stderr = new(bytes.Buffer)
-	out, err := downloadCmd.Output()
-	if err != nil {
-		stderr := downloadCmd.Stderr.(*bytes.Buffer).String()
-		if stderr != "" {
-			fmt.Fprint(os.Stderr, stderr)
-		}
-		return "", fmt.Errorf("go mod download: %w", err)
-	}
-
-	var info struct {
-		Dir string `json:"Dir"`
-	}
-	if err := json.Unmarshal(out, &info); err != nil {
-		return "", fmt.Errorf("parse download info: %w", err)
-	}
-	if info.Dir == "" {
-		return "", fmt.Errorf("module %s: empty Dir from go mod download", modSpec)
-	}
-
-	// 2. Copy module source from cache to tmpdir (writable, so tidy/build work)
+	// Copy module source from cache to tmpdir (cache is often read-only)
 	modDir := filepath.Join(tmpDir, "mod")
-	if err := copyDir(info.Dir, modDir); err != nil {
+	if err := copyDir(spec.Dir, modDir); err != nil {
 		return "", fmt.Errorf("copy module source: %w", err)
 	}
 
-	// 3. Run go mod tidy to resolve dependencies and generate go.sum
+	// Run go mod tidy to resolve dependencies and generate go.sum
 	tidyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	slog.Info("running go mod tidy")
 	tidyCmd := exec.CommandContext(tidyCtx, "go", "mod", "tidy")
 	tidyCmd.Dir = modDir
 	tidyCmd.Env = append(os.Environ(), "GOWORK=off")
@@ -150,7 +127,7 @@ func buildFromSource(ctx context.Context, spec resolvedSpec, tmpDir string) (str
 		return "", fmt.Errorf("go mod tidy: %w", err)
 	}
 
-	// 4. Build with GOOS=js GOARCH=wasm
+	// Build from the package directory
 	buildDir := modDir
 	if spec.Path != "" {
 		buildDir = filepath.Join(modDir, spec.Path)
@@ -218,20 +195,18 @@ func runBuild(spec string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	// Best-effort version resolution
+	// Resolve version and download module in one step
 	resolved, err := resolveSpec(ctx, importPath, version)
-	if err == nil {
-		if resolved.Version != version {
-			slog.Info("resolved version",
-				"pkg", resolved.Pkg, "path", resolved.Path,
-				"from", version, "to", resolved.Version)
-		}
-	} else {
-		slog.Warn("could not resolve version, building with original ref", "spec", spec, "error", err)
-		resolved = resolvedSpec{Pkg: importPath, Path: ""}
+	if err != nil {
+		return fmt.Errorf("resolve: %w", err)
+	}
+	if resolved.Version != version {
+		slog.Info("resolved version",
+			"from", version, "to", resolved.Version,
+			"pkg", resolved.Pkg, "path", resolved.Path)
 	}
 
-	// Build from proxy source
+	// Build from cached module source
 	tmpDir, err := os.MkdirTemp("", "w9y-build-*")
 	if err != nil {
 		return err
