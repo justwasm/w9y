@@ -1,7 +1,6 @@
 package w9y
 
 import (
-	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -194,11 +193,17 @@ func (b *GoWasmBuilder) BuildOrWait(importPath, version, remotePath string, reqC
 }
 
 // doBuildGoWasm runs the actual Go build, stores the result, and returns the SHA.
-// Uses go install with an isolated temp GOPATH, since go build pkg@version
-// is not supported — only go install and go get accept the @version syntax.
+// Uses resolveSpec to resolve the version + download the module, then builds
+// from source with go build in a writable tmpdir (avoids go install restrictions).
 func (b *GoWasmBuilder) doBuild(reqCtx context.Context, importPath, version, remotePath string) (string, error) {
 	ctx, cancel := context.WithTimeout(reqCtx, 5*time.Minute)
 	defer cancel()
+
+	// Resolve version and download module to cache
+	resolved, err := resolveSpec(ctx, importPath, version)
+	if err != nil {
+		return "", fmt.Errorf("resolve: %w", err)
+	}
 
 	tmpDir, err := os.MkdirTemp("", "w9y-gowasm")
 	if err != nil {
@@ -206,49 +211,12 @@ func (b *GoWasmBuilder) doBuild(reqCtx context.Context, importPath, version, rem
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Build directly — version is already canonical at this point
-	pkg := importPath + "@" + version
-
-	slog.Info("building Go WASM",
-		"import_path", importPath,
-		"version", version,
-	)
-
-	cmd := exec.CommandContext(ctx, "go", "install",
-		"-trimpath",
-		"-ldflags", "-s -w",
-		pkg,
-	)
-	cmd.Env = append(os.Environ(),
-		"GOOS=js",
-		"GOARCH=wasm",
-		"GOPATH="+tmpDir,
-		"GOWORK=off",
-	)
-	cmd.Stderr = new(bytes.Buffer)
-
-	if err := cmd.Run(); err != nil {
-		stderr := cmd.Stderr.(*bytes.Buffer).String()
-		slog.Error("go install failed",
-			"import_path", importPath,
-			"version", version,
-			"error", err,
-			"stderr", stderr,
-		)
-		return "", fmt.Errorf("build failed: %s\n\n%s", err, stderr)
-	}
-
-	// Find the built wasm binary: <GOPATH>/bin/js_wasm/<basename>
-	binDir := filepath.Join(tmpDir, "bin", "js_wasm")
-	entries, err := os.ReadDir(binDir)
+	// Build from source (copy cache → tidy → go build)
+	wasmPath, err := buildFromSource(ctx, resolved, tmpDir)
 	if err != nil {
-		return "", fmt.Errorf("output not found in %s: %w", binDir, err)
-	}
-	if len(entries) == 0 {
-		return "", fmt.Errorf("output not found in %s: empty directory", binDir)
+		return "", err
 	}
 
-	wasmPath := filepath.Join(binDir, entries[0].Name())
 	f, err := os.Open(wasmPath)
 	if err != nil {
 		return "", err
