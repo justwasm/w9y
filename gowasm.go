@@ -1,6 +1,7 @@
 package w9y
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -58,9 +59,25 @@ func handleGoWasm(w http.ResponseWriter, r *http.Request, builder *GoWasmBuilder
 		return
 	}
 
-	// Empty version → list versions
+	// Empty version → list versions (or redirect for gist)
 	if gwp.Version == "" {
+		if isGistPath(gwp.ImportPath) {
+			resolveGistAndRedirect(w, r, gwp.ImportPath)
+			return
+		}
 		listGoVersions(w, r, gwp.ImportPath)
+		return
+	}
+
+	// Gist paths can't be resolved as Go modules — build directly
+	if isGistPath(gwp.ImportPath) {
+		sha, err := builder.BuildOrWait(gwp.ImportPath, gwp.Version, remotePath, r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		gzPath := blobPath(builder.DataDir(), sha, true)
+		serveFile(w, r, gzPath, true)
 		return
 	}
 
@@ -87,7 +104,67 @@ func handleGoWasm(w http.ResponseWriter, r *http.Request, builder *GoWasmBuilder
 	serveFile(w, r, gzPath, true)
 }
 
-// listGoVersions handles the /go/<import-path> endpoint (no version specified).
+// isGistPath returns true if the import path is a GitHub Gist.
+func isGistPath(importPath string) bool {
+	return strings.HasPrefix(importPath, "gist.github.com/")
+}
+
+// cloneGist clones a gist repo into dst, checks out ref (if non-empty),
+// and returns the full commit hash of HEAD.
+func cloneGist(ctx context.Context, importPath, ref, dst string) (string, error) {
+	url := "https://" + importPath + ".git"
+
+	slog.Info("git clone", "url", url, "dst", dst)
+	cloneCmd := exec.CommandContext(ctx, "git", "clone", url, dst)
+	cloneCmd.Stderr = new(bytes.Buffer)
+	if err := cloneCmd.Run(); err != nil {
+		stderr := cloneCmd.Stderr.(*bytes.Buffer).String()
+		return "", fmt.Errorf("git clone %s: %w\n%s", url, err, stderr)
+	}
+
+	if ref != "" {
+		slog.Info("git checkout", "ref", ref, "dir", dst)
+		checkoutCmd := exec.CommandContext(ctx, "git", "checkout", ref)
+		checkoutCmd.Dir = dst
+		checkoutCmd.Stderr = new(bytes.Buffer)
+		if err := checkoutCmd.Run(); err != nil {
+			stderr := checkoutCmd.Stderr.(*bytes.Buffer).String()
+			return "", fmt.Errorf("git checkout %s: %w\n%s", ref, err, stderr)
+		}
+	}
+
+	revCmd := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
+	revCmd.Dir = dst
+	out, err := revCmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse HEAD: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// resolveGistAndRedirect clones the gist, gets the latest commit hash, and
+// redirects to the canonical @<commit> URL.
+func resolveGistAndRedirect(w http.ResponseWriter, r *http.Request, importPath string) {
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	tmpDir, err := os.MkdirTemp("", "w9y-gist-*")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	commitHash, err := cloneGist(ctx, importPath, "", tmpDir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	canonical := goWasmPrefix + importPath + "@" + commitHash
+	slog.Info("redirect to canonical gist commit", "from", importPath, "to", commitHash)
+	http.Redirect(w, r, canonical, http.StatusFound)
+}
 func listGoVersions(w http.ResponseWriter, r *http.Request, importPath string) {
 	// First, resolve the module root from the import path
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
@@ -199,20 +276,28 @@ func (b *GoWasmBuilder) doBuild(reqCtx context.Context, importPath, version, rem
 	ctx, cancel := context.WithTimeout(reqCtx, 5*time.Minute)
 	defer cancel()
 
-	// Resolve version and download module to cache
-	resolved, err := resolveSpec(ctx, importPath, version)
-	if err != nil {
-		return "", fmt.Errorf("resolve: %w", err)
-	}
-
 	tmpDir, err := os.MkdirTemp("", "w9y-gowasm")
 	if err != nil {
 		return "", err
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Build from source (copy cache → tidy → go build)
-	wasmPath, err := buildFromSource(ctx, resolved, tmpDir)
+	var wasmPath string
+	if isGistPath(importPath) {
+		gistDir := filepath.Join(tmpDir, "gist")
+		if _, err := cloneGist(ctx, importPath, version, gistDir); err != nil {
+			return "", err
+		}
+		wasmPath, err = buildGoModule(ctx, gistDir, "", tmpDir)
+	} else {
+		// Resolve version and download module to cache
+		resolved, err := resolveSpec(ctx, importPath, version)
+		if err != nil {
+			return "", fmt.Errorf("resolve: %w", err)
+		}
+		// Build from source (copy cache → tidy → go build)
+		wasmPath, err = buildFromSource(ctx, resolved, tmpDir)
+	}
 	if err != nil {
 		return "", err
 	}

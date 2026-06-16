@@ -105,15 +105,21 @@ func resolveSpec(ctx context.Context, importPath, version string) (resolvedSpec,
 	return resolvedSpec{}, fmt.Errorf("could not resolve %s@%s", importPath, version)
 }
 
-// buildFromSource copies the already-downloaded module from the Go module cache
-// to a writable tmpdir, runs go mod tidy, then builds with go build GOOS=js
-// GOARCH=wasm. This approach treats the module as the main module, so replace
-// directives in go.mod are honored (unlike go install which rejects them).
-func buildFromSource(ctx context.Context, spec resolvedSpec, tmpDir string) (string, error) {
-	// Copy module source from cache to tmpdir (cache is often read-only)
-	modDir := filepath.Join(tmpDir, "mod")
-	if err := os.CopyFS(modDir, os.DirFS(spec.Dir)); err != nil {
-		return "", fmt.Errorf("copy module source: %w", err)
+func buildGoModule(ctx context.Context, modDir string, subPkg string, tmpDir string) (string, error) {
+	// Initialize go.mod if missing (e.g. for gists without one)
+	if _, err := os.Stat(filepath.Join(modDir, "go.mod")); os.IsNotExist(err) {
+		slog.Info("go mod init gist", "dir", modDir)
+		initCmd := exec.CommandContext(ctx, "go", "mod", "init", "gist")
+		initCmd.Dir = modDir
+		initCmd.Env = append(os.Environ(), "GOWORK=off")
+		initCmd.Stderr = new(bytes.Buffer)
+		if err := initCmd.Run(); err != nil {
+			stderr := initCmd.Stderr.(*bytes.Buffer).String()
+			if stderr != "" {
+				fmt.Fprint(os.Stderr, stderr)
+			}
+			return "", fmt.Errorf("go mod init: %w", err)
+		}
 	}
 
 	// Run go mod edit -replace before tidy to swap clipboard fork
@@ -154,8 +160,8 @@ func buildFromSource(ctx context.Context, spec resolvedSpec, tmpDir string) (str
 
 	// Build from the package directory
 	buildDir := modDir
-	if spec.Path != "" {
-		buildDir = filepath.Join(modDir, spec.Path)
+	if subPkg != "" {
+		buildDir = filepath.Join(modDir, subPkg)
 	}
 
 	wasmPath := filepath.Join(tmpDir, "output.wasm")
@@ -179,6 +185,20 @@ func buildFromSource(ctx context.Context, spec resolvedSpec, tmpDir string) (str
 	}
 
 	return wasmPath, nil
+}
+
+// buildFromSource copies the already-downloaded module from the Go module cache
+// to a writable tmpdir, runs go mod tidy, then builds with go build GOOS=js
+// GOARCH=wasm. This approach treats the module as the main module, so replace
+// directives in go.mod are honored (unlike go install which rejects them).
+func buildFromSource(ctx context.Context, spec resolvedSpec, tmpDir string) (string, error) {
+	// Copy module source from cache to tmpdir (cache is often read-only)
+	modDir := filepath.Join(tmpDir, "mod")
+	if err := os.CopyFS(modDir, os.DirFS(spec.Dir)); err != nil {
+		return "", fmt.Errorf("copy module source: %w", err)
+	}
+
+	return buildGoModule(ctx, modDir, spec.Path, tmpDir)
 }
 
 func runBuild(spec string) error {
