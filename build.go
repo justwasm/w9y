@@ -3,6 +3,7 @@ package w9y
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -95,6 +96,116 @@ func resolveSpec(ctx context.Context, pkg, version string) (resolvedSpec, error)
 	return resolvedSpec{}, fmt.Errorf("could not resolve %s@%s", pkg, version)
 }
 
+// buildFromSource downloads the module via go mod download, copies it to a
+// writable tmpdir, runs go mod tidy, and builds with go build. This approach
+// avoids go install's restriction on replace directives in dependency go.mod
+// files, because the module is treated as the main module during build.
+func buildFromSource(ctx context.Context, spec resolvedSpec, tmpDir string) (string, error) {
+	modSpec := spec.Pkg + "@" + spec.Version
+
+	// 1. Download module to Go's module cache
+	slog.Info("downloading module", "spec", modSpec)
+	downloadCmd := exec.CommandContext(ctx, "go", "mod", "download", "-json", modSpec)
+	downloadCmd.Env = append(os.Environ(), "GOWORK=off")
+	downloadCmd.Stderr = new(bytes.Buffer)
+	out, err := downloadCmd.Output()
+	if err != nil {
+		stderr := downloadCmd.Stderr.(*bytes.Buffer).String()
+		if stderr != "" {
+			fmt.Fprint(os.Stderr, stderr)
+		}
+		return "", fmt.Errorf("go mod download: %w", err)
+	}
+
+	var info struct {
+		Dir string `json:"Dir"`
+	}
+	if err := json.Unmarshal(out, &info); err != nil {
+		return "", fmt.Errorf("parse download info: %w", err)
+	}
+	if info.Dir == "" {
+		return "", fmt.Errorf("module %s: empty Dir from go mod download", modSpec)
+	}
+
+	// 2. Copy module source from cache to tmpdir (writable, so tidy/build work)
+	modDir := filepath.Join(tmpDir, "mod")
+	if err := copyDir(info.Dir, modDir); err != nil {
+		return "", fmt.Errorf("copy module source: %w", err)
+	}
+
+	// 3. Run go mod tidy to resolve dependencies and generate go.sum
+	tidyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	slog.Info("running go mod tidy")
+	tidyCmd := exec.CommandContext(tidyCtx, "go", "mod", "tidy")
+	tidyCmd.Dir = modDir
+	tidyCmd.Env = append(os.Environ(), "GOWORK=off")
+	tidyCmd.Stderr = new(bytes.Buffer)
+	if err := tidyCmd.Run(); err != nil {
+		stderr := tidyCmd.Stderr.(*bytes.Buffer).String()
+		if stderr != "" {
+			fmt.Fprint(os.Stderr, stderr)
+		}
+		return "", fmt.Errorf("go mod tidy: %w", err)
+	}
+
+	// 4. Build with GOOS=js GOARCH=wasm
+	buildDir := modDir
+	if spec.Path != "" {
+		buildDir = filepath.Join(modDir, spec.Path)
+	}
+
+	wasmPath := filepath.Join(tmpDir, "output.wasm")
+
+	slog.Info("building Go WASM", "pkg", spec.Pkg, "path", spec.Path, "version", spec.Version)
+	buildCmd := exec.CommandContext(ctx, "go", "build",
+		"-trimpath",
+		"-ldflags", "-s -w",
+		"-o", wasmPath,
+		".",
+	)
+	buildCmd.Dir = buildDir
+	buildCmd.Env = append(os.Environ(),
+		"GOOS=js",
+		"GOARCH=wasm",
+		"GOWORK=off",
+		"CGO_ENABLED=0",
+	)
+	buildCmd.Stderr = new(bytes.Buffer)
+	if err := buildCmd.Run(); err != nil {
+		stderr := buildCmd.Stderr.(*bytes.Buffer).String()
+		if stderr != "" {
+			fmt.Fprint(os.Stderr, stderr)
+		}
+		return "", fmt.Errorf("build failed: %w", err)
+	}
+
+	return wasmPath, nil
+}
+
+// copyDir recursively copies a directory tree from src to dst.
+func copyDir(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		dest := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(dest, 0o755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dest, data, 0o644)
+	})
+}
+
 func runBuild(spec string) error {
 	importPath, version, ok := strings.Cut(spec, "@")
 	if !ok || importPath == "" {
@@ -115,67 +226,31 @@ func runBuild(spec string) error {
 				"pkg", resolved.Pkg, "path", resolved.Path,
 				"from", version, "to", resolved.Version)
 		}
-		version = resolved.Version
 	} else {
 		slog.Warn("could not resolve version, building with original ref", "spec", spec, "error", err)
-		// Use the original importPath + version — fall through to build
 		resolved = resolvedSpec{Pkg: importPath, Path: ""}
 	}
 
-	// Build
-	tmpDir, err := os.MkdirTemp("", "w9y-build")
+	// Build from proxy source
+	tmpDir, err := os.MkdirTemp("", "w9y-build-*")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(tmpDir)
 
-	spec = resolved.importPath() + "@" + version
-
-	slog.Info("building Go WASM", "pkg", resolved.Pkg, "path", resolved.Path, "version", version)
-
-	cmd := exec.CommandContext(ctx, "go", "install",
-		"-trimpath",
-		"-ldflags", "-s -w",
-		spec,
-	)
-	cmd.Env = append(os.Environ(),
-		"GOOS=js",
-		"GOARCH=wasm",
-		"GOPATH="+tmpDir,
-		"GOWORK=off",
-	)
-	cmd.Stderr = new(bytes.Buffer)
-
-	if err := cmd.Run(); err != nil {
-		stderr := cmd.Stderr.(*bytes.Buffer).String()
-		slog.Error("build failed",
-			"import_path", importPath,
-			"version", version,
-			"error", err,
-		)
-		// Print full build output for debugging
-		if stderr != "" {
-			fmt.Fprintln(os.Stderr, stderr)
-		}
-		return fmt.Errorf("build failed: %w", err)
-	}
-
-	// Find output
-	binDir := filepath.Join(tmpDir, "bin", "js_wasm")
-	entries, err := os.ReadDir(binDir)
+	wasmPath, err := buildFromSource(ctx, resolved, tmpDir)
 	if err != nil {
-		return fmt.Errorf("output not found in %s: %w", binDir, err)
-	}
-	if len(entries) == 0 {
-		return fmt.Errorf("output not found in %s: empty directory", binDir)
+		return err
 	}
 
 	// Copy to CWD so it survives tmp dir cleanup
-	src := filepath.Join(binDir, entries[0].Name())
-	dst := filepath.Join(".", entries[0].Name())
-	data, err := os.ReadFile(src)
+	dst := filepath.Join(".", filepath.Base(resolved.Path)+".wasm")
+	if resolved.Path == "" {
+		dst = filepath.Join(".", filepath.Base(resolved.Pkg)+".wasm")
+	}
+	data, err := os.ReadFile(wasmPath)
 	if err != nil {
-		return fmt.Errorf("read built wasm: %w", err)
+		return fmt.Errorf("read wasm output: %w", err)
 	}
 	if err := os.WriteFile(dst, data, 0o755); err != nil {
 		return fmt.Errorf("write %s: %w", dst, err)
