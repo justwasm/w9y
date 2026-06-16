@@ -74,6 +74,14 @@ func (s *fileBlobStore) loadCache() error {
 	if m.Entries == nil {
 		m.Entries = make(map[string]Blob)
 	}
+
+	// drop entries with empty hash (e.g. from an old format migration)
+	for k, v := range m.Entries {
+		if v.Hash == "" {
+			delete(m.Entries, k)
+		}
+	}
+
 	s.cache = m.Entries
 	return nil
 }
