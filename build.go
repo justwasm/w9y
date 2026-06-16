@@ -63,6 +63,7 @@ func resolveSpec(ctx context.Context, importPath, version string) (resolvedSpec,
 		cmd.Env = append(os.Environ(), "GOWORK=off")
 		var stderrBuf bytes.Buffer
 		cmd.Stderr = &stderrBuf
+		slog.Debug("go mod download -json " + spec)
 		out, err := cmd.Output()
 		if err != nil {
 			if stderr := stderrBuf.String(); stderr != "" {
@@ -88,6 +89,10 @@ func resolveSpec(ctx context.Context, importPath, version string) (resolvedSpec,
 		if sub == importPath {
 			sub = ""
 		}
+
+		slog.Info("resolved version",
+			"from", version, "to", info.Version,
+			"pkg", info.Path, "path", sub)
 
 		return resolvedSpec{
 			Pkg:     info.Path,
@@ -115,6 +120,7 @@ func buildFromSource(ctx context.Context, spec resolvedSpec, tmpDir string) (str
 	tidyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
+	slog.Info("go mod tidy", "dir", modDir)
 	tidyCmd := exec.CommandContext(tidyCtx, "go", "mod", "tidy")
 	tidyCmd.Dir = modDir
 	tidyCmd.Env = append(os.Environ(), "GOWORK=off")
@@ -134,14 +140,9 @@ func buildFromSource(ctx context.Context, spec resolvedSpec, tmpDir string) (str
 	}
 
 	wasmPath := filepath.Join(tmpDir, "output.wasm")
-
-	slog.Info("building Go WASM", "pkg", spec.Pkg, "path", spec.Path, "version", spec.Version)
-	buildCmd := exec.CommandContext(ctx, "go", "build",
-		"-trimpath",
-		"-ldflags", "-s -w",
-		"-o", wasmPath,
-		".",
-	)
+	args := []string{"build", "-trimpath", "-ldflags", "-s -w", "-o", wasmPath, "."}
+	slog.Info("go " + strings.Join(args, " "), "dir", buildDir)
+	buildCmd := exec.CommandContext(ctx, "go", args...)
 	buildCmd.Dir = buildDir
 	buildCmd.Env = append(os.Environ(),
 		"GOOS=js",
@@ -177,11 +178,6 @@ func runBuild(spec string) error {
 	resolved, err := resolveSpec(ctx, importPath, version)
 	if err != nil {
 		return fmt.Errorf("resolve: %w", err)
-	}
-	if resolved.Version != version {
-		slog.Info("resolved version",
-			"from", version, "to", resolved.Version,
-			"pkg", resolved.Pkg, "path", resolved.Path)
 	}
 
 	// Build from cached module source
