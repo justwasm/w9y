@@ -37,16 +37,24 @@ Examples:
 
 // resolvedSpec holds the three components of a resolved build spec.
 type resolvedSpec struct {
-	Pkg     string // original package import path (e.g. "github.com/btwiuse/w9y/cmd/w9y")
-	ModPath string // resolved module path (e.g. "github.com/btwiuse/w9y")
+	Pkg     string // module import path (e.g. "github.com/btwiuse/w9y")
+	Path    string // subpackage path within the module (e.g. "cmd/w9y")
 	Version string // resolved canonical version (e.g. "v0.0.0-20260616064018-2314db5ec7ed")
+}
+
+// importPath returns the full package import path (pkg + "/" + path).
+func (r resolvedSpec) importPath() string {
+	if r.Path == "" {
+		return r.Pkg
+	}
+	return r.Pkg + "/" + r.Path
 }
 
 // resolveSpec resolves a non-canonical version reference (commit hash, branch
 // name, "latest") to a canonical Go module version. It tries progressively
 // shorter import paths, following go get's module resolution logic.
 //
-// If version is already a valid semver, pkg and modPath both equal the input.
+// If version is already a valid semver, path is empty and pkg equals the input.
 func resolveSpec(ctx context.Context, pkg, version string) (resolvedSpec, error) {
 	if version == "" {
 		version = "latest"
@@ -54,7 +62,7 @@ func resolveSpec(ctx context.Context, pkg, version string) (resolvedSpec, error)
 
 	// Already canonical — no resolution needed
 	if semver.IsValid(version) {
-		return resolvedSpec{Pkg: pkg, ModPath: pkg, Version: version}, nil
+		return resolvedSpec{Pkg: pkg, Path: "", Version: version}, nil
 	}
 
 	// Try progressively shorter import paths
@@ -75,7 +83,12 @@ func resolveSpec(ctx context.Context, pkg, version string) (resolvedSpec, error)
 		}
 		ver := strings.TrimSpace(string(out))
 		if ver != "" && semver.IsValid(ver) {
-			return resolvedSpec{Pkg: pkg, ModPath: modPath, Version: ver}, nil
+			// The subpackage path is whatever remains after stripping the module root
+			sub := strings.TrimPrefix(pkg, modPath+"/")
+			if sub == pkg {
+				sub = "" // pkg == modPath (no subpackage)
+			}
+			return resolvedSpec{Pkg: modPath, Path: sub, Version: ver}, nil
 		}
 	}
 
@@ -99,12 +112,14 @@ func runBuild(spec string) error {
 	if err == nil {
 		if resolved.Version != version {
 			slog.Info("resolved version",
-				"pkg", importPath, "module", resolved.ModPath,
+				"pkg", resolved.Pkg, "path", resolved.Path,
 				"from", version, "to", resolved.Version)
 		}
 		version = resolved.Version
 	} else {
 		slog.Warn("could not resolve version, building with original ref", "spec", spec, "error", err)
+		// Use the original importPath + version — fall through to build
+		resolved = resolvedSpec{Pkg: importPath, Path: ""}
 	}
 
 	// Build
@@ -114,14 +129,14 @@ func runBuild(spec string) error {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	pkg := importPath + "@" + version
+	spec = resolved.importPath() + "@" + version
 
-	slog.Info("building Go WASM", "import_path", importPath, "version", version)
+	slog.Info("building Go WASM", "pkg", resolved.Pkg, "path", resolved.Path, "version", version)
 
 	cmd := exec.CommandContext(ctx, "go", "install",
 		"-trimpath",
 		"-ldflags", "-s -w",
-		pkg,
+		spec,
 	)
 	cmd.Env = append(os.Environ(),
 		"GOOS=js",
