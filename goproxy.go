@@ -176,10 +176,8 @@ func handleGoproxyMod(w http.ResponseWriter, r *http.Request, ctx context.Contex
 
 	modBytes, err := os.ReadFile(filepath.Join(tmpDir, "go.mod"))
 	if err != nil {
-		// No go.mod — return a minimal one
-		modPath = strings.TrimPrefix(modPath, "gist.github.com/")
-		modPath = strings.ReplaceAll(modPath, "/", "-")
-		modBytes = []byte("module gist\n\ngo 1.21\n")
+		// No go.mod — return a minimal one with the correct module path
+		modBytes = []byte("module " + modPath + "\n\ngo 1.21\n")
 	}
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -198,6 +196,15 @@ func handleGoproxyZip(w http.ResponseWriter, r *http.Request, ctx context.Contex
 	if _, err := cloneGist(ctx, modPath, commitHash, tmpDir); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
+	}
+
+	// Ensure go.mod exists in the zip with the correct module path
+	if _, err := os.Stat(filepath.Join(tmpDir, "go.mod")); os.IsNotExist(err) {
+		modBytes := []byte("module " + modPath + "\n\ngo 1.21\n")
+		if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), modBytes, 0644); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// Zip the gist directory — Go expects files under <module>@<version>/
