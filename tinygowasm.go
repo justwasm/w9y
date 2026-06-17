@@ -113,6 +113,14 @@ func (b *GoWasmBuilder) doTinyBuild(reqCtx context.Context, importPath, version,
 				}
 				return "", fmt.Errorf("go mod init: %w", err)
 			}
+
+			slog.Info("go mod edit -go=1.26", "dir", gistDir)
+			verCmd := exec.CommandContext(ctx, "go", "mod", "edit", "-go=1.26")
+			verCmd.Dir = gistDir
+			verCmd.Env = append(os.Environ(), "GOWORK=off")
+			if err := verCmd.Run(); err != nil {
+				return "", fmt.Errorf("go mod edit -go=1.26: %w", err)
+			}
 		}
 	} else {
 		resolved, err := resolveSpec(ctx, importPath, version)

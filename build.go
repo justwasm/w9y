@@ -120,6 +120,15 @@ func buildGoModule(ctx context.Context, modDir string, subPkg string, tmpDir str
 			}
 			return "", fmt.Errorf("go mod init: %w", err)
 		}
+
+		// Set Go version in go.mod
+		slog.Info("go mod edit -go=1.26", "dir", modDir)
+		verCmd := exec.CommandContext(ctx, "go", "mod", "edit", "-go=1.26")
+		verCmd.Dir = modDir
+		verCmd.Env = append(os.Environ(), "GOWORK=off")
+		if err := verCmd.Run(); err != nil {
+			return "", fmt.Errorf("go mod edit -go=1.26: %w", err)
+		}
 	}
 
 	// Run go mod edit -replace before tidy to swap clipboard fork

@@ -79,6 +79,14 @@ func runTinyBuild(spec string) error {
 				}
 				return fmt.Errorf("go mod init: %w", err)
 			}
+
+			slog.Info("go mod edit -go=1.26", "dir", gistDir)
+			verCmd := exec.CommandContext(ctx, "go", "mod", "edit", "-go=1.26")
+			verCmd.Dir = gistDir
+			verCmd.Env = append(os.Environ(), "GOWORK=off")
+			if err := verCmd.Run(); err != nil {
+				return fmt.Errorf("go mod edit -go=1.26: %w", err)
+			}
 		}
 	} else {
 		// Resolve version and download module in one step
@@ -114,6 +122,14 @@ func runTinyBuild(spec string) error {
 					fmt.Fprint(os.Stderr, stderr)
 				}
 				return fmt.Errorf("go mod init: %w", err)
+			}
+
+			slog.Info("go mod edit -go=1.26", "dir", modDir)
+			verCmd := exec.CommandContext(ctx, "go", "mod", "edit", "-go=1.26")
+			verCmd.Dir = modDir
+			verCmd.Env = append(os.Environ(), "GOWORK=off")
+			if err := verCmd.Run(); err != nil {
+				return fmt.Errorf("go mod edit -go=1.26: %w", err)
 			}
 		}
 	}
