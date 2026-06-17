@@ -82,7 +82,7 @@ func (b *GoWasmBuilder) TinyBuildOrWait(importPath, version, remotePath string, 
 }
 
 func (b *GoWasmBuilder) doTinyBuild(reqCtx context.Context, importPath, version, remotePath string) (string, error) {
-	ctx, cancel := context.WithTimeout(reqCtx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(reqCtx, 15*time.Minute)
 	defer cancel()
 
 	tmpDir, err := os.MkdirTemp("", "w9y-tinygowasm")
@@ -161,7 +161,7 @@ func (b *GoWasmBuilder) doTinyBuild(reqCtx context.Context, importPath, version,
 	args := []string{"build", "-o", wasmPath, "-target=wasm", "."}
 	slog.Info("tinygo "+strings.Join(args, " "), "dir", buildDir)
 
-	tinyCtx, tinyCancel := context.WithTimeout(ctx, 3*time.Minute)
+	tinyCtx, tinyCancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer tinyCancel()
 
 	buildCmd := exec.CommandContext(tinyCtx, "tinygo", args...)

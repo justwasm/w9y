@@ -273,7 +273,7 @@ func (b *GoWasmBuilder) BuildOrWait(importPath, version, remotePath string, reqC
 // Uses resolveSpec to resolve the version + download the module, then builds
 // from source with go build in a writable tmpdir (avoids go install restrictions).
 func (b *GoWasmBuilder) doBuild(reqCtx context.Context, importPath, version, remotePath string) (string, error) {
-	ctx, cancel := context.WithTimeout(reqCtx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(reqCtx, 15*time.Minute)
 	defer cancel()
 
 	tmpDir, err := os.MkdirTemp("", "w9y-gowasm")

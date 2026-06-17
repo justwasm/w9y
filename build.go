@@ -219,7 +219,7 @@ func runBuild(spec string) error {
 		version = "latest"
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
 	tmpDir, err := os.MkdirTemp("", "w9y-build-*")
