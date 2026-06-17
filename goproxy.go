@@ -31,22 +31,28 @@ func isGoproxyPath(remotePath string) bool {
 //	/goproxy/<module>/@v/<version>.info → version info
 //	/goproxy/<module>/@v/<version>.mod  → go.mod
 //	/goproxy/<module>/@v/<version>.zip  → source zip
+//	/goproxy/<module>/@latest          → latest version info
 func handleGoproxy(w http.ResponseWriter, r *http.Request, remotePath string) {
-	// Strip prefix and split
 	trimmed := strings.TrimPrefix(remotePath, goproxyPrefix)
 
-	// Split into module path and the rest. The module path is everything before "/@v/".
-	// Module paths can contain slashes (e.g. "gist.github.com/user/id").
 	atvIdx := strings.Index(trimmed, "/@v/")
-	if atvIdx < 0 {
+	atLatest := strings.HasSuffix(trimmed, "/@latest")
+
+	if atvIdx < 0 && !atLatest {
 		http.Error(w, "bad goproxy path", http.StatusBadRequest)
 		return
 	}
-	modPath := trimmed[:atvIdx]
-	suffix := trimmed[atvIdx+len("/@v/"):]
 
+	var modPath string
+	if atvIdx >= 0 {
+		modPath = trimmed[:atvIdx]
+	} else {
+		modPath = strings.TrimSuffix(trimmed, "/@latest")
+	}
+
+	// Return 404 for non-gist paths so the toolchain continues probing
 	if !strings.HasPrefix(modPath, "gist.github.com/") {
-		http.Error(w, "not a gist module path", http.StatusBadRequest)
+		http.Error(w, "not a gist module", http.StatusNotFound)
 		return
 	}
 
@@ -54,20 +60,50 @@ func handleGoproxy(w http.ResponseWriter, r *http.Request, remotePath string) {
 	defer cancel()
 
 	switch {
-	case suffix == "list":
-		handleGoproxyList(w, r, ctx, modPath)
-	case strings.HasSuffix(suffix, ".info"):
-		version := strings.TrimSuffix(suffix, ".info")
-		handleGoproxyInfo(w, r, ctx, modPath, version)
-	case strings.HasSuffix(suffix, ".mod"):
-		version := strings.TrimSuffix(suffix, ".mod")
-		handleGoproxyMod(w, r, ctx, modPath, version)
-	case strings.HasSuffix(suffix, ".zip"):
-		version := strings.TrimSuffix(suffix, ".zip")
-		handleGoproxyZip(w, r, ctx, modPath, version)
-	default:
-		http.Error(w, "unknown goproxy endpoint", http.StatusBadRequest)
+	case atLatest:
+		handleGoproxyLatest(w, r, ctx, modPath)
+	case atvIdx >= 0:
+		suffix := trimmed[atvIdx+len("/@v/"):]
+		switch {
+		case suffix == "list":
+			handleGoproxyList(w, r, ctx, modPath)
+		case strings.HasSuffix(suffix, ".info"):
+			handleGoproxyInfo(w, r, ctx, modPath, strings.TrimSuffix(suffix, ".info"))
+		case strings.HasSuffix(suffix, ".mod"):
+			handleGoproxyMod(w, r, ctx, modPath, strings.TrimSuffix(suffix, ".mod"))
+		case strings.HasSuffix(suffix, ".zip"):
+			handleGoproxyZip(w, r, ctx, modPath, strings.TrimSuffix(suffix, ".zip"))
+		default:
+			http.Error(w, "unknown goproxy endpoint", http.StatusBadRequest)
+		}
 	}
+}
+
+func handleGoproxyLatest(w http.ResponseWriter, r *http.Request, ctx context.Context, modPath string) {
+	tmpDir, err := os.MkdirTemp("", "w9y-goproxy-*")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	commitHash, err := cloneGist(ctx, modPath, "", tmpDir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	commitT, err := commitTime(ctx, tmpDir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]string{
+		"Version": commitHash,
+		"Time":    commitT.UTC().Format(time.RFC3339Nano),
+	})
 }
 
 func handleGoproxyList(w http.ResponseWriter, r *http.Request, ctx context.Context, modPath string) {
@@ -84,9 +120,10 @@ func handleGoproxyList(w http.ResponseWriter, r *http.Request, ctx context.Conte
 		return
 	}
 
-	version := pseudoVersion(ctx, tmpDir, commitHash)
+	// Return raw commit hash as the version — toolchain passes it verbatim
+	// to .info/.mod/.zip endpoints, where git checkout <hash> works.
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Write([]byte(version + "\n"))
+	w.Write([]byte(commitHash + "\n"))
 }
 
 func handleGoproxyInfo(w http.ResponseWriter, r *http.Request, ctx context.Context, modPath, version string) {
@@ -97,14 +134,13 @@ func handleGoproxyInfo(w http.ResponseWriter, r *http.Request, ctx context.Conte
 	}
 	defer os.RemoveAll(tmpDir)
 
-	commitHash, err := cloneGist(ctx, modPath, version, tmpDir)
-	if err != nil {
+	// version is a raw commit hash from @v/list — checkout works directly
+	if _, err := cloneGist(ctx, modPath, version, tmpDir); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 
-	ver := pseudoVersion(ctx, tmpDir, commitHash)
-	commitTime, err := commitTime(ctx, tmpDir)
+	commitT, err := commitTime(ctx, tmpDir)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -112,8 +148,8 @@ func handleGoproxyInfo(w http.ResponseWriter, r *http.Request, ctx context.Conte
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]string{
-		"Version": ver,
-		"Time":    commitTime.UTC().Format(time.RFC3339Nano),
+		"Version": version,
+		"Time":    commitT.UTC().Format(time.RFC3339Nano),
 	})
 }
 
@@ -235,21 +271,6 @@ func handleGoGet(w http.ResponseWriter, r *http.Request, remotePath string) {
 <body>go get %s</body>
 </html>
 `, importPath, repoURL, importPath, repoURL, gistRef, gistRef, importPath)
-}
-
-// pseudoVersion generates a Go pseudo-version from a commit hash.
-// Format: v0.0.0-<yyyymmddhhmmss>-<commit12>
-func pseudoVersion(ctx context.Context, repoDir, commitHash string) string {
-	if len(commitHash) > 12 {
-		commitHash = commitHash[:12]
-	}
-
-	t, err := commitTime(ctx, repoDir)
-	if err != nil {
-		return "v0.0.0-00010101000000-" + commitHash
-	}
-
-	return fmt.Sprintf("v0.0.0-%s-%s", t.UTC().Format("20060102150405"), commitHash)
 }
 
 // commitTime returns the commit date of HEAD in the given repo.
