@@ -8,4 +8,6 @@ export CGO_ENABLED=0
 
 export GONOSUMDB='*'
 
+tinygo version
+
 w9y server
