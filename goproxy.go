@@ -200,15 +200,16 @@ func handleGoproxyZip(w http.ResponseWriter, r *http.Request, ctx context.Contex
 		return
 	}
 
-	// Zip the gist directory (without the tmpDir prefix)
+	// Zip the gist directory — Go expects files under <module>@<version>/
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
+	prefix := modPath + "@" + version + "/"
 
 	err = filepath.Walk(tmpDir, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		// Skip the root .git directory
+		// Skip .git
 		if fi.IsDir() && fi.Name() == ".git" {
 			return filepath.SkipDir
 		}
@@ -219,8 +220,9 @@ func handleGoproxyZip(w http.ResponseWriter, r *http.Request, ctx context.Contex
 		if rel == "." {
 			return nil
 		}
+		name := prefix + filepath.ToSlash(rel)
 		if fi.IsDir() {
-			_, err := zw.Create(rel + "/")
+			_, err := zw.Create(name + "/")
 			return err
 		}
 		f, err := os.Open(path)
@@ -228,7 +230,7 @@ func handleGoproxyZip(w http.ResponseWriter, r *http.Request, ctx context.Contex
 			return err
 		}
 		defer f.Close()
-		w, err := zw.Create(rel)
+		w, err := zw.Create(name)
 		if err != nil {
 			return err
 		}
