@@ -99,9 +99,10 @@ func handleGoproxyLatest(w http.ResponseWriter, r *http.Request, ctx context.Con
 		return
 	}
 
+	pv := pseudoVersion(commitT, commitHash)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]string{
-		"Version": commitHash,
+		"Version": pv,
 		"Time":    commitT.UTC().Format(time.RFC3339Nano),
 	})
 }
@@ -120,10 +121,15 @@ func handleGoproxyList(w http.ResponseWriter, r *http.Request, ctx context.Conte
 		return
 	}
 
-	// Return raw commit hash as the version — toolchain passes it verbatim
-	// to .info/.mod/.zip endpoints, where git checkout <hash> works.
+	commitT, err := commitTime(ctx, tmpDir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	pv := pseudoVersion(commitT, commitHash)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Write([]byte(commitHash + "\n"))
+	w.Write([]byte(pv + "\n"))
 }
 
 func handleGoproxyInfo(w http.ResponseWriter, r *http.Request, ctx context.Context, modPath, version string) {
@@ -134,8 +140,8 @@ func handleGoproxyInfo(w http.ResponseWriter, r *http.Request, ctx context.Conte
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// version is a raw commit hash from @v/list — checkout works directly
-	if _, err := cloneGist(ctx, modPath, version, tmpDir); err != nil {
+	commitHash := commitFromVersion(version)
+	if _, err := cloneGist(ctx, modPath, commitHash, tmpDir); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -146,9 +152,10 @@ func handleGoproxyInfo(w http.ResponseWriter, r *http.Request, ctx context.Conte
 		return
 	}
 
+	pv := pseudoVersion(commitT, commitHash)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]string{
-		"Version": version,
+		"Version": pv,
 		"Time":    commitT.UTC().Format(time.RFC3339Nano),
 	})
 }
@@ -161,7 +168,8 @@ func handleGoproxyMod(w http.ResponseWriter, r *http.Request, ctx context.Contex
 	}
 	defer os.RemoveAll(tmpDir)
 
-	if _, err := cloneGist(ctx, modPath, version, tmpDir); err != nil {
+	commitHash := commitFromVersion(version)
+	if _, err := cloneGist(ctx, modPath, commitHash, tmpDir); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -186,7 +194,8 @@ func handleGoproxyZip(w http.ResponseWriter, r *http.Request, ctx context.Contex
 	}
 	defer os.RemoveAll(tmpDir)
 
-	if _, err := cloneGist(ctx, modPath, version, tmpDir); err != nil {
+	commitHash := commitFromVersion(version)
+	if _, err := cloneGist(ctx, modPath, commitHash, tmpDir); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -273,7 +282,36 @@ func handleGoGet(w http.ResponseWriter, r *http.Request, remotePath string) {
 `, importPath, repoURL, importPath, repoURL, gistRef, gistRef, importPath)
 }
 
-// commitTime returns the commit date of HEAD in the given repo.
+// pseudoVersion generates a Go pseudo-version from a commit hash and time.
+// Format: v0.0.0-<yyyymmddhhmmss>-<commit12>
+func pseudoVersion(t time.Time, commitHash string) string {
+	if len(commitHash) > 12 {
+		commitHash = commitHash[:12]
+	}
+	return fmt.Sprintf("v0.0.0-%s-%s", t.UTC().Format("20060102150405"), commitHash)
+}
+
+// commitFromVersion extracts the commit hash from a version string.
+// Handles both pseudo-versions (v0.0.0-<ts>-<commit12>) and raw commit hashes.
+func commitFromVersion(version string) string {
+	// If it looks like a raw commit hash, use it directly
+	if len(version) >= 40 {
+		for _, c := range version {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				return version
+			}
+		}
+		return version
+	}
+	// Pseudo-version format: <base>-<timestamp>-<commit12>
+	// Commit is the part after the last hyphen
+	if idx := strings.LastIndex(version, "-"); idx >= 0 {
+		return version[idx+1:]
+	}
+	return version
+}
+
+
 func commitTime(ctx context.Context, repoDir string) (time.Time, error) {
 	cmd := exec.CommandContext(ctx, "git", "log", "-1", "--format=%ct")
 	cmd.Dir = repoDir
