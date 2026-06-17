@@ -1,6 +1,6 @@
 # w9y
 
-w9y is a WebAssembly blob hosting service with content-addressed storage and automatic gzip serving.
+w9y is a WebAssembly blob hosting service with content-addressed storage, automatic gzip serving, on-demand Go WASM builds, and a Go module proxy for GitHub Gists.
 
 Upload a `.wasm` file once, then serve any named `.wasm` path with gzip compression. The path is mapped to a deduplicated blob store via `mapping.yaml`, so multiple public paths can point at the same uploaded bytes. CORS is enabled by default, and no authentication is required yet.
 
@@ -22,6 +22,12 @@ By default, files are stored in `./data`. Set `DATA_DIR` to use another director
 
 ```sh
 PORT=8080 DATA_DIR=/var/lib/w9y w9y
+```
+
+Use `-check` to verify blob integrity at startup:
+
+```sh
+w9y server -check
 ```
 
 ## Storage Layout
@@ -84,6 +90,8 @@ Content-Encoding: gzip
 Access-Control-Allow-Origin: *
 ```
 
+The `/blob/<sha>.wasm.gz` path serves the raw gzip bytes (no `Content-Encoding`), suitable for direct download.
+
 ## Backup
 
 Download all blobs and mapping from the remote server to a local directory:
@@ -127,6 +135,116 @@ w9y restore /tmp/mybackup
 ```
 
 Progress is shown on stderr.
+
+## GC (Garbage Collection)
+
+Find blobs in storage that are not referenced by any mapping entry:
+
+```sh
+w9y gc
+```
+
+By default, runs in dry-run mode (lists orphans only). Use `-clean` to actually delete:
+
+```sh
+w9y gc -clean
+```
+
+## Check
+
+Verify blob integrity by checking SHA-256 hashes and WASM magic bytes:
+
+```sh
+w9y check
+```
+
+## Build (Go WASM)
+
+Build a Go WASM binary from any Go module with build-from-source semantics (honors `replace` directives in `go.mod`):
+
+```sh
+w9y build github.com/user/repo/cmd/app@latest
+w9y build github.com/user/repo/cmd/app@v0.1.0
+w9y build github.com/user/repo/cmd/app@commit-hash
+```
+
+The output is written to the current directory as `<app>.wasm`.
+
+## Go WASM On-Demand (`/go/`)
+
+The server can build and serve Go WASM binaries on demand. Request a module with an optional version:
+
+```text
+GET /go/<import-path>            → list available versions
+GET /go/<import-path>@<version>  → build & serve WASM
+```
+
+Examples:
+
+```sh
+# Build and serve the latest version
+curl -o app.wasm https://w9y.up.railway.app/go/github.com/btwiuse/w9y/cmd/w9y@latest
+
+# Build a specific version
+curl -o app.wasm https://w9y.up.railway.app/go/github.com/btwiuse/w9y/cmd/w9y@v0.1.0
+```
+
+The build process:
+1. Resolves the version and downloads the module
+2. Copies to a writable temp directory
+3. Applies `replace` directives (clipboard fork, bubbletea fork)
+4. Runs `go mod tidy`
+5. Builds with `GOOS=js GOARCH=wasm`
+6. Stores and serves the result
+
+### Gist Support
+
+GitHub Gists are supported as Go WASM builds. The server automatically clones the gist and runs the build pipeline:
+
+```text
+GET /go/gist.github.com/<user>/<id>          → resolve latest commit, redirect
+GET /go/gist.github.com/<user>/<id>@<commit> → build & serve WASM
+```
+
+Example:
+
+```sh
+curl -o app.wasm https://w9y.up.railway.app/go/gist.github.com/btwiuse/83e2efac358d22a009ece0a3f4feb801
+```
+
+If the gist has no `go.mod`, one is auto-initialized with the correct module path.
+
+## Go Module Proxy (`/goproxy/`)
+
+The server implements the Go module proxy protocol for gist paths, enabling `go get` / `go install` with gist modules:
+
+```sh
+GOPROXY=https://w9y.up.railway.app/goproxy go get gist.github.com/<user>/<id>@<commit>
+```
+
+Standard goproxy endpoints:
+
+| Endpoint | Description |
+|---|---|
+| `@v/list` | List versions (pseudo-version from commit hash) |
+| `@v/<version>.info` | Version info JSON |
+| `@v/<version>.mod` | Module `go.mod` |
+| `@v/<version>.zip` | Module source zip |
+| `@latest` | Latest version info |
+
+The proxy also handles `?go-get=1` discovery, so gist modules can be resolved by the Go toolchain via direct VCS.
+
+## CLI Commands Summary
+
+| Command | Description |
+|---|---|
+| `server` | Start HTTP server |
+| `upload` | Upload a wasm file |
+| `backup` | Download all blobs from remote |
+| `restore` | Upload all blobs to remote |
+| `gc` | Find/remove orphan blobs |
+| `check` | Verify blob integrity |
+| `build` | Build Go WASM binary locally |
 
 ## Docker
 
