@@ -50,6 +50,16 @@ func NewServer(dataDir string) http.Handler {
 		return
 	}
 
+	// Serve version info
+	if remotePath == goWasmPrefix+"version" {
+		serveVersion(w, r, "go")
+		return
+	}
+	if remotePath == tinyGoWasmPrefix+"version" {
+		serveVersion(w, r, "tinygo")
+		return
+	}
+
 	// Go WASM: build-on-demand from import path
 		if isGoWasmPath(remotePath) {
 			handleGoWasm(w, r, builder, remotePath)
@@ -334,6 +344,25 @@ func serveWasmExecJS(w http.ResponseWriter, r *http.Request, runtime string) {
 
 	w.Header().Set("Content-Type", "application/javascript")
 	http.ServeContent(w, r, "wasm_exec.js", stat.ModTime(), f)
+}
+
+var versionCache sync.Map // runtime → string
+
+func serveVersion(w http.ResponseWriter, r *http.Request, runtime string) {
+	v, ok := versionCache.Load(runtime)
+	if !ok {
+		cmd := exec.Command(runtime, "version")
+		out, err := cmd.Output()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		versionCache.Store(runtime, string(out))
+		v = string(out)
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write([]byte(v.(string)))
 }
 
 func newServerCommand() *cobra.Command {
