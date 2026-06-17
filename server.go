@@ -44,6 +44,18 @@ func NewServer(dataDir string) http.Handler {
 			return
 		}
 
+		// Go module proxy for gist paths
+		if isGoproxyPath(remotePath) {
+			handleGoproxy(w, r, remotePath)
+			return
+		}
+
+		// go-get=1 discovery for gist paths
+		if r.URL.Query().Has("go-get") {
+			handleGoGet(w, r, remotePath)
+			return
+		}
+
 		switch r.Method {
 		case http.MethodPut, http.MethodPost:
 			handleUpload(w, r, store, dataDir, remotePath)
