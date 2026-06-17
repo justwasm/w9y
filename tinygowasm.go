@@ -32,7 +32,7 @@ func handleTinyGoWasm(w http.ResponseWriter, r *http.Request, builder *GoWasmBui
 
 	if gwp.Version == "" {
 		if isGistPath(gwp.ImportPath) {
-			resolveGistAndRedirect(w, r, gwp.ImportPath)
+			resolveGistAndRedirect(w, r, gwp.ImportPath, tinyGoWasmPrefix)
 			return
 		}
 		http.Error(w, "specify a version with @<tag>", http.StatusBadRequest)

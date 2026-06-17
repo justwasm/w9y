@@ -62,7 +62,7 @@ func handleGoWasm(w http.ResponseWriter, r *http.Request, builder *GoWasmBuilder
 	// Empty version → list versions (or redirect for gist)
 	if gwp.Version == "" {
 		if isGistPath(gwp.ImportPath) {
-			resolveGistAndRedirect(w, r, gwp.ImportPath)
+			resolveGistAndRedirect(w, r, gwp.ImportPath, goWasmPrefix)
 			return
 		}
 		listGoVersions(w, r, gwp.ImportPath)
@@ -143,8 +143,8 @@ func cloneGist(ctx context.Context, importPath, ref, dst string) (string, error)
 }
 
 // resolveGistAndRedirect clones the gist, gets the latest commit hash, and
-// redirects to the canonical @<commit> URL.
-func resolveGistAndRedirect(w http.ResponseWriter, r *http.Request, importPath string) {
+// redirects to the canonical @<commit> URL under the given prefix.
+func resolveGistAndRedirect(w http.ResponseWriter, r *http.Request, importPath, prefix string) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
@@ -161,8 +161,8 @@ func resolveGistAndRedirect(w http.ResponseWriter, r *http.Request, importPath s
 		return
 	}
 
-	canonical := goWasmPrefix + importPath + "@" + commitHash
-	slog.Info("redirect to canonical gist commit", "from", importPath, "to", commitHash)
+	canonical := prefix + importPath + "@" + commitHash
+	slog.Info("redirect to canonical gist commit", "from", importPath, "to", commitHash, "prefix", prefix)
 	http.Redirect(w, r, canonical, http.StatusFound)
 }
 func listGoVersions(w http.ResponseWriter, r *http.Request, importPath string) {
