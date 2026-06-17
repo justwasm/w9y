@@ -229,6 +229,15 @@ curl -o app.wasm https://w9y.up.railway.app/tinygo/github.com/user/repo@latest
 curl -o app.wasm https://w9y.up.railway.app/tinygo/gist.github.com/user/id@commit
 ```
 
+### wasm_exec.js
+
+The JavaScript glue files needed to run WASM binaries in the browser are served at:
+
+| Endpoint | Source |
+|---|---|
+| `/go/wasm_exec.js` | `$(go env GOROOT)/lib/wasm/wasm_exec.js` |
+| `/tinygo/wasm_exec.js` | `$(tinygo env TINYGOROOT)/targets/wasm_exec.js` |
+
 ## Go Module Proxy (`/goproxy/`)
 
 The server implements the Go module proxy protocol for gist paths, enabling `go get` / `go install` with gist modules:

@@ -9,9 +9,11 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -38,7 +40,17 @@ func NewServer(dataDir string) http.Handler {
 			return
 		}
 
-		// Go WASM: build-on-demand from import path
+		// Serve wasm_exec.js glue files
+	if remotePath == goWasmPrefix+"wasm_exec.js" {
+		serveWasmExecJS(w, r, "go")
+		return
+	}
+	if remotePath == tinyGoWasmPrefix+"wasm_exec.js" {
+		serveWasmExecJS(w, r, "tinygo")
+		return
+	}
+
+	// Go WASM: build-on-demand from import path
 		if isGoWasmPath(remotePath) {
 			handleGoWasm(w, r, builder, remotePath)
 			return
@@ -270,6 +282,58 @@ func serveFile(w http.ResponseWriter, r *http.Request, filePath string, mightBeG
 
 	w.Header().Set("Content-Type", contentType(virtualPath))
 	http.ServeContent(w, r, filepath.Base(virtualPath), stat.ModTime(), f)
+}
+
+// resolveWasmExecJS resolves the path to wasm_exec.js for the given runtime.
+func resolveWasmExecJS(runtime string) (string, error) {
+	switch runtime {
+	case "go":
+		goroot, err := exec.Command("go", "env", "GOROOT").Output()
+		if err != nil {
+			return "", fmt.Errorf("go env GOROOT: %w", err)
+		}
+		return filepath.Join(strings.TrimSpace(string(goroot)), "lib", "wasm", "wasm_exec.js"), nil
+	case "tinygo":
+		tinygoroot, err := exec.Command("tinygo", "env", "TINYGOROOT").Output()
+		if err != nil {
+			return "", fmt.Errorf("tinygo env TINYGOROOT: %w", err)
+		}
+		return filepath.Join(strings.TrimSpace(string(tinygoroot)), "targets", "wasm_exec.js"), nil
+	default:
+		return "", fmt.Errorf("unknown runtime: %s", runtime)
+	}
+}
+
+// serveWasmExecJS serves the wasm_exec.js glue file for the given runtime.
+var wasmExecJSCache sync.Map // runtime → path
+
+func serveWasmExecJS(w http.ResponseWriter, r *http.Request, runtime string) {
+	path, ok := wasmExecJSCache.Load(runtime)
+	if !ok {
+		resolved, err := resolveWasmExecJS(runtime)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		wasmExecJSCache.Store(runtime, resolved)
+		path = resolved
+	}
+
+	f, err := os.Open(path.(string))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/javascript")
+	http.ServeContent(w, r, "wasm_exec.js", stat.ModTime(), f)
 }
 
 func newServerCommand() *cobra.Command {
