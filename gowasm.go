@@ -32,24 +32,24 @@ type goWasmPath struct {
 	Version    string // version tag (e.g. "v0.1.0"), empty if not specified
 }
 
-// parseGoWasmPath parses a /go/ remote path into its components.
+// parseWasmPath parses a remote path with the given prefix into components.
 //
 // Accepted forms:
 //
-//	/go/<import-path>@<version>  → build & serve
-//	/go/<import-path>@latest    → list versions
-//	/go/<import-path>           → list versions
-func parseGoWasmPath(remotePath string) (goWasmPath, bool) {
-	trimmed := strings.TrimPrefix(remotePath, goWasmPrefix)
-
-	// Split on @
+//	<prefix><import-path>@<version>  → build & serve
+//	<prefix><import-path>            → no version
+func parseWasmPath(remotePath, prefix string) (goWasmPath, bool) {
+	trimmed := strings.TrimPrefix(remotePath, prefix)
 	importPath, version, _ := strings.Cut(trimmed, "@")
-
 	if importPath == "" {
 		return goWasmPath{}, false
 	}
-
 	return goWasmPath{ImportPath: importPath, Version: version}, true
+}
+
+// parseGoWasmPath parses a /go/ remote path into its components.
+func parseGoWasmPath(remotePath string) (goWasmPath, bool) {
+	return parseWasmPath(remotePath, goWasmPrefix)
 }
 
 func handleGoWasm(w http.ResponseWriter, r *http.Request, builder *GoWasmBuilder, remotePath string) {

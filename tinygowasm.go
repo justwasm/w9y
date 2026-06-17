@@ -24,7 +24,7 @@ func isTinyGoWasmPath(remotePath string) bool {
 }
 
 func handleTinyGoWasm(w http.ResponseWriter, r *http.Request, builder *GoWasmBuilder, remotePath string) {
-	gwp, ok := parseGoWasmPath(remotePath)
+	gwp, ok := parseWasmPath(remotePath, tinyGoWasmPrefix)
 	if !ok {
 		http.NotFound(w, r)
 		return
