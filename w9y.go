@@ -168,6 +168,7 @@ automatic gzip serving, and on-demand Go WASM builds.`,
 	root.AddCommand(newGCCommand())
 	root.AddCommand(newCheckCommand())
 	root.AddCommand(newBuildCommand())
+	root.AddCommand(newSemverCommand())
 
 	return root
 }
