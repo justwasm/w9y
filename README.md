@@ -176,7 +176,7 @@ The server can build and serve Go WASM binaries on demand. Request a module with
 
 ```text
 GET /go/<import-path>            → list available versions
-GET /go/<import-path>@<version>  → build & serve WASM
+GET /go/<import-path>@<version>  → build & serve WASM (Go)
 ```
 
 Examples:
@@ -214,6 +214,21 @@ curl -o app.wasm https://w9y.up.railway.app/go/gist.github.com/btwiuse/83e2efac3
 
 If the gist has no `go.mod`, one is auto-initialized with the correct module path.
 
+## TinyGo WASM On-Demand (`/tinygo/`)
+
+Same as `/go/` but uses TinyGo for smaller WASM binaries:
+
+```text
+GET /tinygo/<import-path>@<version> → build & serve WASM (TinyGo)
+```
+
+TinyGo produces significantly smaller WASM binaries (typically 4-10x smaller than standard `go build`).
+
+```sh
+curl -o app.wasm https://w9y.up.railway.app/tinygo/github.com/user/repo@latest
+curl -o app.wasm https://w9y.up.railway.app/tinygo/gist.github.com/user/id@commit
+```
+
 ## Go Module Proxy (`/goproxy/`)
 
 The server implements the Go module proxy protocol for gist paths, enabling `go get` / `go install` with gist modules:
@@ -245,6 +260,8 @@ The proxy also handles `?go-get=1` discovery, so gist modules can be resolved by
 | `gc` | Find/remove orphan blobs |
 | `check` | Verify blob integrity |
 | `build` | Build Go WASM binary locally |
+| `tinybuild` | Build Go WASM binary locally with TinyGo |
+| `semver` | Check if a string is a valid semantic version |
 
 ## Docker
 

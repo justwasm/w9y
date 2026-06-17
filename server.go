@@ -44,6 +44,12 @@ func NewServer(dataDir string) http.Handler {
 			return
 		}
 
+		// TinyGo WASM: build-on-demand from import path
+		if isTinyGoWasmPath(remotePath) {
+			handleTinyGoWasm(w, r, builder, remotePath)
+			return
+		}
+
 		// Go module proxy for gist paths
 		if isGoproxyPath(remotePath) {
 			handleGoproxy(w, r, remotePath)
