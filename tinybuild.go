@@ -134,6 +134,23 @@ func runTinyBuild(spec string) error {
 		}
 	}
 
+	// Run go mod tidy to resolve dependencies
+	tidyCtx, tidyCancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer tidyCancel()
+
+	slog.Info("go mod tidy", "dir", buildDir)
+	tidyCmd := exec.CommandContext(tidyCtx, "go", "mod", "tidy")
+	tidyCmd.Dir = buildDir
+	tidyCmd.Env = append(os.Environ(), "GOWORK=off")
+	tidyCmd.Stderr = new(bytes.Buffer)
+	if err := tidyCmd.Run(); err != nil {
+		stderr := tidyCmd.Stderr.(*bytes.Buffer).String()
+		if stderr != "" {
+			fmt.Fprint(os.Stderr, stderr)
+		}
+		return fmt.Errorf("go mod tidy: %w", err)
+	}
+
 	// Build with tinygo
 	wasmPath := filepath.Join(tmpDir, "output.wasm")
 	args := []string{"build", "-o", wasmPath, "-target=wasm", "."}
