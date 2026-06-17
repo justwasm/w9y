@@ -213,29 +213,41 @@ func runBuild(spec string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	// Resolve version and download module in one step
-	resolved, err := resolveSpec(ctx, importPath, version)
-	if err != nil {
-		return fmt.Errorf("resolve: %w", err)
-	}
-
-	// Build from cached module source
 	tmpDir, err := os.MkdirTemp("", "w9y-build-*")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(tmpDir)
 
-	wasmPath, err := buildFromSource(ctx, resolved, tmpDir)
+	var wasmPath string
+	var pkgBase string
+
+	if isGistPath(importPath) {
+		gistDir := filepath.Join(tmpDir, "gist")
+		if _, err := cloneGist(ctx, importPath, version, gistDir); err != nil {
+			return err
+		}
+		parts := strings.Split(strings.TrimRight(importPath, "/"), "/")
+		pkgBase = parts[len(parts)-1]
+		wasmPath, err = buildGoModule(ctx, gistDir, "", tmpDir)
+	} else {
+		// Resolve version and download module in one step
+		resolved, err := resolveSpec(ctx, importPath, version)
+		if err != nil {
+			return fmt.Errorf("resolve: %w", err)
+		}
+		pkgBase = filepath.Base(resolved.Path)
+		if resolved.Path == "" {
+			pkgBase = filepath.Base(resolved.Pkg)
+		}
+		wasmPath, err = buildFromSource(ctx, resolved, tmpDir)
+	}
 	if err != nil {
 		return err
 	}
 
 	// Copy to CWD so it survives tmp dir cleanup
-	dst := filepath.Join(".", filepath.Base(resolved.Path)+".wasm")
-	if resolved.Path == "" {
-		dst = filepath.Join(".", filepath.Base(resolved.Pkg)+".wasm")
-	}
+	dst := filepath.Join(".", pkgBase+".wasm")
 	data, err := os.ReadFile(wasmPath)
 	if err != nil {
 		return fmt.Errorf("read wasm output: %w", err)
