@@ -706,3 +706,46 @@ func textResponse(status int, body string) *http.Response {
 		Header:     make(http.Header),
 	}
 }
+
+func TestAliasPersistence(t *testing.T) {
+	dir := t.TempDir()
+	store := NewBlobStore(dir)
+
+	// Set an entry
+	if err := store.Set("/go/foo@v0.0.1", "abc123"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Set an alias
+	if err := store.SetAlias("/go/foo@latest", "/go/foo@v0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify alias works
+	target, err := store.GetAlias("/go/foo@latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != "/go/foo@v0.0.1" {
+		t.Fatalf("alias target = %q, want %q", target, "/go/foo@v0.0.1")
+	}
+
+	// Re-open store from disk and verify alias persisted
+	store2 := NewBlobStore(dir)
+	target2, err := store2.GetAlias("/go/foo@latest")
+	if err != nil {
+		t.Fatal("alias not persisted:", err)
+	}
+	if target2 != "/go/foo@v0.0.1" {
+		t.Fatalf("persisted alias target = %q, want %q", target2, "/go/foo@v0.0.1")
+	}
+
+	// Verify alias shows up in ListAliases
+	aliases, err := store2.ListAliases()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aliases) != 1 || aliases["/go/foo@latest"] != "/go/foo@v0.0.1" {
+		t.Fatalf("ListAliases = %v, want map[/go/foo@latest:/go/foo@v0.0.1]", aliases)
+	}
+}

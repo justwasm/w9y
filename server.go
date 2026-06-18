@@ -531,6 +531,7 @@ func runBuildJob(job *BuildJob, builder *GoWasmBuilder, jobs *JobStore) {
 	if err == nil && resolved.Version != version {
 		canonical := prefix + importPath + "@" + resolved.Version
 		_ = builder.SetAlias(remotePath, canonical)
+		remotePath = canonical
 		buildVersion = resolved.Version
 		jobs.SetResolved(job.ID, importPath+"@"+resolved.Version)
 		slog.Info("resolved version", "from", version, "to", resolved.Version, "pkg", importPath)
