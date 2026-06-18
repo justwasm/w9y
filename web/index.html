@@ -293,7 +293,7 @@ footer{margin-top:32px;padding:16px 0;border-top:1px solid #ddd;color:#888;font-
       var submitBtn = document.getElementById('m-submit');
       var statusEl = document.getElementById('m-status');
       submitBtn.disabled = true;
-      submitBtn.textContent = 'Building...';
+      submitBtn.textContent = 'Starting...';
       statusEl.innerHTML = '';
 
       fetch('/api/build', {
@@ -301,11 +301,14 @@ footer{margin-top:32px;padding:16px 0;border-top:1px solid #ddd;color:#888;font-
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({spec: spec, runtime: runtime})
       })
-      .then(function(r) { return r.text().then(function(t) { return {ok: r.ok, text: t}; }); })
-      .then(function(res) {
-        if (!res.ok) throw new Error(res.text);
-        statusEl.innerHTML = '<div class="status status-ok">' + res.text + '</div>';
-        setTimeout(function() { closeModal(); loadEntries(); }, 1500);
+      .then(function(r) {
+        if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+        return r.json();
+      })
+      .then(function(job) {
+        statusEl.innerHTML = '<div class="status">Building ' + spec + '...</div>';
+        submitBtn.textContent = 'Building...';
+        pollJob(job.id, statusEl, submitBtn);
       })
       .catch(function(e) {
         statusEl.innerHTML = '<div class="status status-err">Error: ' + e.message + '</div>';
@@ -313,6 +316,29 @@ footer{margin-top:32px;padding:16px 0;border-top:1px solid #ddd;color:#888;font-
         submitBtn.textContent = 'Build';
       });
     });
+  }
+
+  function pollJob(jobId, statusEl, submitBtn) {
+    fetch('/api/build/' + jobId)
+      .then(function(r) { return r.json(); })
+      .then(function(job) {
+        if (job.status === 'done') {
+          statusEl.innerHTML = '<div class="status status-ok">' + job.result + '</div>';
+          submitBtn.textContent = 'Build';
+          submitBtn.disabled = false;
+          setTimeout(function() { closeModal(); loadEntries(); }, 1500);
+        } else if (job.status === 'error') {
+          statusEl.innerHTML = '<div class="status status-err">Error: ' + job.error + '</div>';
+          submitBtn.textContent = 'Build';
+          submitBtn.disabled = false;
+        } else {
+          // still building, poll again
+          setTimeout(function() { pollJob(jobId, statusEl, submitBtn); }, 2000);
+        }
+      })
+      .catch(function() {
+        setTimeout(function() { pollJob(jobId, statusEl, submitBtn); }, 3000);
+      });
   }
 
   function closeModal() {

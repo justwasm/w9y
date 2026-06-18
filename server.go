@@ -2,6 +2,7 @@ package w9y
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 func NewServer(dataDir string) http.Handler {
 	store := NewBlobStore(dataDir)
 	builder := NewGoWasmBuilder(store)
+	jobs := NewJobStore()
 	return withCORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -41,7 +43,12 @@ func NewServer(dataDir string) http.Handler {
 			return
 		}
 		if remotePath == "/api/build" && r.Method == http.MethodPost {
-			handleBuildAndUpload(w, r, store, dataDir, builder)
+			handleBuildStart(w, r, builder, jobs)
+			return
+		}
+		if strings.HasPrefix(remotePath, "/api/build/") && r.Method == http.MethodGet {
+			jobID := strings.TrimPrefix(remotePath, "/api/build/")
+			handleBuildPoll(w, jobID, jobs)
 			return
 		}
 		if strings.HasPrefix(remotePath, "/api/auth/") {
@@ -469,7 +476,7 @@ func verifyGzipHash(gzPath, wantSHA string) error {
 	return nil
 }
 
-func handleBuildAndUpload(w http.ResponseWriter, r *http.Request, store BlobStore, dataDir string, builder *GoWasmBuilder) {
+func handleBuildStart(w http.ResponseWriter, r *http.Request, builder *GoWasmBuilder, jobs *JobStore) {
 	var req struct {
 		Spec    string `json:"spec"`
 		Runtime string `json:"runtime"`
@@ -486,21 +493,43 @@ func handleBuildAndUpload(w http.ResponseWriter, r *http.Request, store BlobStor
 		req.Runtime = "go"
 	}
 
-	importPath, version, ok := strings.Cut(req.Spec, "@")
+	job := jobs.Create(req.Spec, req.Runtime)
+
+	go runBuildJob(job, builder, jobs)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(job)
+}
+
+func handleBuildPoll(w http.ResponseWriter, jobID string, jobs *JobStore) {
+	job, ok := jobs.Get(jobID)
+	if !ok {
+		http.Error(w, "job not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(job)
+}
+
+func runBuildJob(job *BuildJob, builder *GoWasmBuilder, jobs *JobStore) {
+	importPath, version, ok := strings.Cut(job.Spec, "@")
 	if !ok || importPath == "" {
-		http.Error(w, "spec must be pkg@version", http.StatusBadRequest)
+		jobs.SetError(job.ID, "spec must be pkg@version")
 		return
 	}
 	if version == "" {
 		version = "latest"
 	}
 
-	prefix := "/" + req.Runtime + "/"
-	remotePath := prefix + req.Spec
+	prefix := "/" + job.Runtime + "/"
+	remotePath := prefix + job.Spec
+
+	jobs.SetBuilding(job.ID)
 
 	// Resolve non-canonical versions (latest, main, commit hashes)
 	buildVersion := version
-	resolved, err := resolveSpec(r.Context(), importPath, version)
+	resolved, err := resolveSpec(context.Background(), importPath, version)
 	if err == nil && resolved.Version != version {
 		canonical := prefix + importPath + "@" + resolved.Version
 		_ = builder.SetAlias(remotePath, canonical)
@@ -512,16 +541,15 @@ func handleBuildAndUpload(w http.ResponseWriter, r *http.Request, store BlobStor
 	}
 
 	var sha string
-	if req.Runtime == "tinygo" {
-		sha, err = builder.TinyBuildOrWait(importPath, buildVersion, remotePath, r.Context())
+	if job.Runtime == "tinygo" {
+		sha, err = builder.TinyBuildOrWait(importPath, buildVersion, remotePath, context.Background())
 	} else {
-		sha, err = builder.BuildOrWait(importPath, buildVersion, remotePath, r.Context())
+		sha, err = builder.BuildOrWait(importPath, buildVersion, remotePath, context.Background())
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		jobs.SetError(job.ID, err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "built %s -> blob/%s.wasm.gz", remotePath, sha)
+	jobs.SetDone(job.ID, fmt.Sprintf("built %s -> blob/%s.wasm.gz", remotePath, sha))
 }
