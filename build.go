@@ -44,10 +44,10 @@ Examples:
 
 // resolvedSpec holds the components of a resolved build spec.
 type resolvedSpec struct {
-	Pkg     string // module import path (e.g. "github.com/btwiuse/w9y")
-	Path    string // subpackage path within the module (e.g. "cmd/w9y")
-	Version string // resolved canonical version (e.g. "v0.0.0-20260616064018-2314db5ec7ed")
-	Dir     string // cached module directory from go mod download
+	Pkg     string `json:"pkg"`     // module import path (e.g. "github.com/btwiuse/w9y")
+	Path    string `json:"path"`    // subpackage path within the module (e.g. "cmd/w9y")
+	Version string `json:"version"` // resolved canonical version (e.g. "v0.0.0-20260616064018-2314db5ec7ed")
+	Dir     string `json:"-"`       // cached module directory from go mod download
 }
 
 // resolveSpec resolves a non-canonical version reference (commit hash, branch,
