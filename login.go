@@ -82,10 +82,13 @@ func runLogin() error {
 	}
 
 	// Step 1: Request device code
-	resp, err := http.PostForm(deviceCodeURL, url.Values{
+	req, _ := http.NewRequest("POST", deviceCodeURL, strings.NewReader(url.Values{
 		"client_id": {githubClientID},
 		"scope":     {deviceScope},
-	})
+	}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("request device code: %w", err)
 	}
@@ -118,11 +121,14 @@ func runLogin() error {
 	for time.Now().Before(deadline) {
 		time.Sleep(time.Duration(dc.Interval) * time.Second)
 
-		tokenResp, err := http.PostForm(tokenURL, url.Values{
+		tokenReq, _ := http.NewRequest("POST", tokenURL, strings.NewReader(url.Values{
 			"client_id":   {githubClientID},
 			"device_code": {dc.DeviceCode},
 			"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
-		})
+		}.Encode()))
+		tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		tokenReq.Header.Set("Accept", "application/json")
+		tokenResp, err := http.DefaultClient.Do(tokenReq)
 		if err != nil {
 			continue
 		}
