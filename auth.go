@@ -55,6 +55,15 @@ func verifySession(cookie string) (string, bool) {
 }
 
 func getUsername(r *http.Request) string {
+	// Check Bearer token first (CLI)
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+		token := strings.TrimPrefix(auth, "Bearer ")
+		if username, ok := verifyBearerToken(token); ok {
+			return username
+		}
+	}
+
+	// Check session cookie (web)
 	c, err := r.Cookie(sessionCookie)
 	if err != nil {
 		return ""
@@ -64,6 +73,48 @@ func getUsername(r *http.Request) string {
 		return ""
 	}
 	return username
+}
+
+func verifyBearerToken(token string) (string, bool) {
+	req, _ := http.NewRequest("GET", "https://api.github.com/user", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", false
+	}
+
+	var user struct {
+		Login string `json:"login"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil || user.Login == "" {
+		return "", false
+	}
+
+	// Verify org membership
+	memberURL := fmt.Sprintf("https://api.github.com/orgs/%s/members/%s", githubOrg, user.Login)
+	memberReq, _ := http.NewRequest("GET", memberURL, nil)
+	memberReq.Header.Set("Authorization", "Bearer "+token)
+	memberReq.Header.Set("Accept", "application/json")
+
+	memberResp, err := http.DefaultClient.Do(memberReq)
+	if err != nil {
+		return user.Login, false
+	}
+	defer memberResp.Body.Close()
+	io.Copy(io.Discard, memberResp.Body)
+
+	if memberResp.StatusCode != http.StatusNoContent {
+		return "", false
+	}
+
+	return user.Login, true
 }
 
 func handleAuthLogin(w http.ResponseWriter, r *http.Request) {

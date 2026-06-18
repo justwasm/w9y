@@ -46,6 +46,9 @@ func runDelete(remotePath string) error {
 	if err != nil {
 		return err
 	}
+	if token := loadToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

@@ -116,6 +116,9 @@ func uploadFile(client *http.Client, fileName, remotePath string) error {
 	if err != nil {
 		return err
 	}
+	if token := loadToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	if !exists {
 		req.ContentLength = bodyLen
 	}
