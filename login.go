@@ -15,10 +15,11 @@ import (
 )
 
 const (
-	deviceCodeURL  = "https://github.com/login/device/code"
-	tokenURL       = "https://github.com/login/oauth/access_token"
-	tokenFile      = ".w9y/token"
-	deviceScope    = "read:org"
+	deviceCodeURL    = "https://github.com/login/device/code"
+	tokenURL         = "https://github.com/login/oauth/access_token"
+	tokenFile        = ".w9y/token"
+	deviceScope      = "read:org"
+	githubClientIDPublic = "Ov23liKPpQDyUeVkjNiI"
 )
 
 func tokenPath() string {
@@ -77,13 +78,9 @@ func newLogoutCommand() *cobra.Command {
 }
 
 func runLogin() error {
-	if githubClientID == "" {
-		return fmt.Errorf("GITHUB_CLIENT_ID not set")
-	}
-
 	// Step 1: Request device code
 	req, _ := http.NewRequest("POST", deviceCodeURL, strings.NewReader(url.Values{
-		"client_id": {githubClientID},
+		"client_id": {githubClientIDPublic},
 		"scope":     {deviceScope},
 	}.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -122,7 +119,7 @@ func runLogin() error {
 		time.Sleep(time.Duration(dc.Interval) * time.Second)
 
 		tokenReq, _ := http.NewRequest("POST", tokenURL, strings.NewReader(url.Values{
-			"client_id":   {githubClientID},
+			"client_id":   {githubClientIDPublic},
 			"device_code": {dc.DeviceCode},
 			"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
 		}.Encode()))
