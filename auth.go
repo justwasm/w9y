@@ -212,8 +212,12 @@ func exchangeCode(code string) (string, error) {
 	data := fmt.Sprintf(`{"client_id":"%s","client_secret":"%s","code":"%s"}`,
 		githubClientID, githubClientSecret, code)
 
-	resp, err := http.Post("https://github.com/login/oauth/access_token", "application/json",
+	req, _ := http.NewRequest("POST", "https://github.com/login/oauth/access_token",
 		strings.NewReader(data))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
 	}
