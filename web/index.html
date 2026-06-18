@@ -332,7 +332,10 @@ footer{margin-top:32px;padding:16px 0;border-top:1px solid #ddd;color:#888;font-
           submitBtn.textContent = 'Build';
           submitBtn.disabled = false;
         } else {
-          // still building, poll again
+          var msg = job.resolved
+            ? 'Building <code>' + job.resolved + '</code>...'
+            : 'Resolving ' + job.spec + '...';
+          statusEl.innerHTML = '<div class="status">' + msg + '</div>';
           setTimeout(function() { pollJob(jobId, statusEl, submitBtn); }, 2000);
         }
       })

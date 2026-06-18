@@ -8,14 +8,24 @@ import (
 )
 
 type BuildJob struct {
-	ID        string    `json:"id"`
-	Spec      string    `json:"spec"`
-	Runtime   string    `json:"runtime"`
-	Status    string    `json:"status"` // pending, building, done, error
-	Result    string    `json:"result,omitempty"`
-	Error     string    `json:"error,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        string     `json:"id"`
+	Spec      string     `json:"spec"`
+	Runtime   string     `json:"runtime"`
+	Status    string     `json:"status"` // pending, building, done, error
+	Resolved  string     `json:"resolved,omitempty"`
+	Result    string     `json:"result,omitempty"`
+	Error     string     `json:"error,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
 	DoneAt    *time.Time `json:"done_at,omitempty"`
+}
+
+func (s *JobStore) SetResolved(id, resolved string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if job, ok := s.jobs[id]; ok {
+		job.Resolved = resolved
+		job.Status = "building"
+	}
 }
 
 type JobStore struct {

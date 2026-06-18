@@ -525,8 +525,6 @@ func runBuildJob(job *BuildJob, builder *GoWasmBuilder, jobs *JobStore) {
 	prefix := "/" + job.Runtime + "/"
 	remotePath := prefix + job.Spec
 
-	jobs.SetBuilding(job.ID)
-
 	// Resolve non-canonical versions (latest, main, commit hashes)
 	buildVersion := version
 	resolved, err := resolveSpec(context.Background(), importPath, version)
@@ -534,10 +532,14 @@ func runBuildJob(job *BuildJob, builder *GoWasmBuilder, jobs *JobStore) {
 		canonical := prefix + importPath + "@" + resolved.Version
 		_ = builder.SetAlias(remotePath, canonical)
 		buildVersion = resolved.Version
+		jobs.SetResolved(job.ID, importPath+"@"+resolved.Version)
 		slog.Info("resolved version", "from", version, "to", resolved.Version, "pkg", importPath)
 	} else if err != nil {
 		slog.Warn("could not resolve version, building with original ref",
 			"import_path", importPath, "version", version, "error", err)
+		jobs.SetBuilding(job.ID)
+	} else {
+		jobs.SetBuilding(job.ID)
 	}
 
 	var sha string
