@@ -89,6 +89,8 @@ func NewServer(dataDir string) http.Handler {
 			handleUpload(w, r, store, dataDir, remotePath)
 		case http.MethodGet, http.MethodHead:
 			handleDownload(w, r, store, dataDir, remotePath)
+		case http.MethodDelete:
+			handleDelete(w, store, remotePath)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -98,7 +100,7 @@ func NewServer(dataDir string) http.Handler {
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, PUT, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, PUT, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Encoding")
 		next.ServeHTTP(w, r)
 	})
@@ -255,6 +257,21 @@ func handleDownload(w http.ResponseWriter, r *http.Request, store BlobStore, dat
 	}
 	gzPath := blobPath(dataDir, e.Hash, true)
 	serveFile(w, r, gzPath, true)
+}
+
+func handleDelete(w http.ResponseWriter, store BlobStore, remotePath string) {
+	if isBlobRemotePath(remotePath) {
+		http.Error(w, "cannot delete blob paths directly", http.StatusBadRequest)
+		return
+	}
+
+	if err := store.Delete(remotePath); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	fmt.Fprintf(w, "deleted %s", remotePath)
 }
 
 func serveFile(w http.ResponseWriter, r *http.Request, filePath string, mightBeGzip bool) {

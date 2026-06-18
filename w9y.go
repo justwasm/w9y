@@ -43,6 +43,7 @@ type BlobStore interface {
 	Set(path, hash string) error
 	SetWithTime(path, hash string, time int64) error
 	SetBatch(entries map[string]Blob) error
+	Delete(path string) error
 	List() (map[string]Blob, error)
 	DataDir() string
 }
@@ -131,6 +132,13 @@ func (s *fileBlobStore) List() (map[string]Blob, error) {
 	return result, nil
 }
 
+func (s *fileBlobStore) Delete(path string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.cache, path)
+	return s.save(s.cache)
+}
+
 func (s *fileBlobStore) save(entries map[string]Blob) error {
 	mappingPath := filepath.Join(s.dataDir, "mapping.yaml")
 	if err := os.MkdirAll(s.dataDir, 0o755); err != nil {
@@ -171,6 +179,7 @@ automatic gzip serving, and on-demand Go WASM builds.`,
 	root.AddCommand(newResolveCommand())
 	root.AddCommand(newListCommand())
 	root.AddCommand(newGetCommand())
+	root.AddCommand(newDeleteCommand())
 	root.AddCommand(newSemverCommand())
 
 	return root
