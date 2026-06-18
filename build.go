@@ -16,6 +16,7 @@ import (
 )
 
 func newBuildCommand() *cobra.Command {
+	var keepTmp bool
 	cmd := &cobra.Command{
 		Use:   "build <pkg>@<version>",
 		Short: "Build a Go WASM binary locally",
@@ -29,9 +30,10 @@ Examples:
 `,
 		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			return runBuild(args[0])
+			return runBuild(args[0], keepTmp)
 		},
 	}
+	cmd.Flags().BoolVar(&keepTmp, "keep-tmp", false, "preserve temporary build directory for debugging")
 	return cmd
 }
 
@@ -210,7 +212,7 @@ func buildFromSource(ctx context.Context, spec resolvedSpec, tmpDir string) (str
 	return buildGoModule(ctx, modDir, spec.Path, tmpDir)
 }
 
-func runBuild(spec string) error {
+func runBuild(spec string, keepTmp bool) error {
 	importPath, version, ok := strings.Cut(spec, "@")
 	if !ok || importPath == "" {
 		return fmt.Errorf("usage: w9y build <pkg>@<version> (got %q)", spec)
@@ -226,7 +228,11 @@ func runBuild(spec string) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(tmpDir)
+	if keepTmp {
+		slog.Info("keeping temp dir", "dir", tmpDir)
+	} else {
+		defer os.RemoveAll(tmpDir)
+	}
 
 	var wasmPath string
 	var pkgBase string

@@ -15,6 +15,7 @@ import (
 )
 
 func newTinyBuildCommand() *cobra.Command {
+	var keepTmp bool
 	cmd := &cobra.Command{
 		Use:   "tinybuild <pkg>@<version>",
 		Short: "Build a Go WASM binary using TinyGo",
@@ -28,13 +29,14 @@ Examples:
 `,
 		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			return runTinyBuild(args[0])
+			return runTinyBuild(args[0], keepTmp)
 		},
 	}
+	cmd.Flags().BoolVar(&keepTmp, "keep-tmp", false, "preserve temporary build directory for debugging")
 	return cmd
 }
 
-func runTinyBuild(spec string) error {
+func runTinyBuild(spec string, keepTmp bool) error {
 	importPath, version, ok := strings.Cut(spec, "@")
 	if !ok || importPath == "" {
 		return fmt.Errorf("usage: w9y tinybuild <pkg>@<version> (got %q)", spec)
@@ -50,7 +52,11 @@ func runTinyBuild(spec string) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(tmpDir)
+	if keepTmp {
+		slog.Info("keeping temp dir", "dir", tmpDir)
+	} else {
+		defer os.RemoveAll(tmpDir)
+	}
 
 	var buildDir string
 	var pkgBase string
