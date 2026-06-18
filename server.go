@@ -89,12 +89,28 @@ func NewServer(dataDir string) http.Handler {
 
 	// Go WASM: build-on-demand from import path
 		if isGoWasmPath(remotePath) {
+			if r.Method == http.MethodDelete {
+				if authEnabled() && getUsername(r) == "" {
+					http.Error(w, "login required", http.StatusUnauthorized)
+					return
+				}
+				handleDelete(w, store, remotePath)
+				return
+			}
 			handleGoWasm(w, r, builder, remotePath)
 			return
 		}
 
 		// TinyGo WASM: build-on-demand from import path
 		if isTinyGoWasmPath(remotePath) {
+			if r.Method == http.MethodDelete {
+				if authEnabled() && getUsername(r) == "" {
+					http.Error(w, "login required", http.StatusUnauthorized)
+					return
+				}
+				handleDelete(w, store, remotePath)
+				return
+			}
 			handleTinyGoWasm(w, r, builder, remotePath)
 			return
 		}
