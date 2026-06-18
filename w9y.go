@@ -170,6 +170,7 @@ automatic gzip serving, and on-demand Go WASM builds.`,
 	root.AddCommand(newBuildCommand())
 	root.AddCommand(newResolveCommand())
 	root.AddCommand(newListCommand())
+	root.AddCommand(newGetCommand())
 	root.AddCommand(newSemverCommand())
 
 	return root
