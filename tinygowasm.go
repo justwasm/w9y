@@ -92,12 +92,14 @@ func (b *GoWasmBuilder) doTinyBuild(reqCtx context.Context, importPath, version,
 	defer os.RemoveAll(tmpDir)
 
 	var buildDir string
+	var modRoot string
 	if isGistPath(importPath) {
 		gistDir := filepath.Join(tmpDir, "gist")
 		if _, err := cloneGist(ctx, importPath, version, gistDir); err != nil {
 			return "", err
 		}
 		buildDir = gistDir
+		modRoot = gistDir
 
 		// Init go.mod if missing
 		if _, err := os.Stat(filepath.Join(gistDir, "go.mod")); os.IsNotExist(err) {
@@ -134,9 +136,29 @@ func (b *GoWasmBuilder) doTinyBuild(reqCtx context.Context, importPath, version,
 		}
 
 		buildDir = modDir
+		modRoot = modDir
 		if resolved.Path != "" {
 			buildDir = filepath.Join(modDir, resolved.Path)
 		}
+	}
+
+	// Apply replace directives for WASM compatibility (clipboard, bubbletea)
+	replaceCtx, replaceCancel := context.WithTimeout(ctx, 1*time.Minute)
+	defer replaceCancel()
+
+	slog.Info("go mod edit -replace", "dir", modRoot)
+	replaceCmd := exec.CommandContext(replaceCtx, "go", "mod", "edit",
+		"-replace", "github.com/atotto/clipboard=github.com/justwasm/clipboard@v0.1.6",
+		"-replace", "charm.land/bubbletea/v2=github.com/bubbletui/bubbletea/v2@v2.0.8")
+	replaceCmd.Dir = modRoot
+	replaceCmd.Env = append(os.Environ(), "GOWORK=off")
+	replaceCmd.Stderr = new(bytes.Buffer)
+	if err := replaceCmd.Run(); err != nil {
+		stderr := replaceCmd.Stderr.(*bytes.Buffer).String()
+		if stderr != "" {
+			fmt.Fprint(os.Stderr, stderr)
+		}
+		return "", fmt.Errorf("go mod edit -replace: %w", err)
 	}
 
 	// Run go mod tidy to resolve dependencies
