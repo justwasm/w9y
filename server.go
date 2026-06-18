@@ -498,12 +498,24 @@ func handleBuildAndUpload(w http.ResponseWriter, r *http.Request, store BlobStor
 	prefix := "/" + req.Runtime + "/"
 	remotePath := prefix + req.Spec
 
+	// Resolve non-canonical versions (latest, main, commit hashes)
+	buildVersion := version
+	resolved, err := resolveSpec(r.Context(), importPath, version)
+	if err == nil && resolved.Version != version {
+		canonical := prefix + importPath + "@" + resolved.Version
+		_ = builder.SetAlias(remotePath, canonical)
+		buildVersion = resolved.Version
+		slog.Info("resolved version", "from", version, "to", resolved.Version, "pkg", importPath)
+	} else if err != nil {
+		slog.Warn("could not resolve version, building with original ref",
+			"import_path", importPath, "version", version, "error", err)
+	}
+
 	var sha string
-	var err error
 	if req.Runtime == "tinygo" {
-		sha, err = builder.TinyBuildOrWait(importPath, version, remotePath, r.Context())
+		sha, err = builder.TinyBuildOrWait(importPath, buildVersion, remotePath, r.Context())
 	} else {
-		sha, err = builder.BuildOrWait(importPath, version, remotePath, r.Context())
+		sha, err = builder.BuildOrWait(importPath, buildVersion, remotePath, r.Context())
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
