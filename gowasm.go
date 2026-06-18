@@ -84,8 +84,10 @@ func handleGoWasm(w http.ResponseWriter, r *http.Request, builder *GoWasmBuilder
 	// Best-effort resolution to canonical version
 	resolved, err := resolveSpec(r.Context(), gwp.ImportPath, gwp.Version)
 	if err == nil && resolved.Version != gwp.Version {
-		// Redirect to canonical form
+		// Create alias from non-canonical to canonical path
 		canonical := goWasmPrefix + gwp.ImportPath + "@" + resolved.Version
+		_ = builder.SetAlias(remotePath, canonical)
+		// Redirect to canonical form
 		http.Redirect(w, r, canonical, http.StatusFound)
 		return
 	}

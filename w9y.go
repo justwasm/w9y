@@ -45,6 +45,9 @@ type BlobStore interface {
 	SetBatch(entries map[string]Blob) error
 	Delete(path string) error
 	List() (map[string]Blob, error)
+	SetAlias(alias, target string) error
+	GetAlias(alias string) (string, error)
+	ListAliases() (map[string]string, error)
 	DataDir() string
 }
 
@@ -63,12 +66,14 @@ func (s *fileBlobStore) loadCache() error {
 	if err != nil {
 		if os.IsNotExist(err) {
 			s.cache = make(map[string]Blob)
+			s.aliases = make(map[string]string)
 			return nil
 		}
 		return err
 	}
 	var m struct {
-		Entries map[string]Blob `yaml:"entries"`
+		Entries map[string]Blob     `yaml:"entries"`
+		Aliases map[string]string   `yaml:"aliases,omitempty"`
 	}
 	if err := yaml.Unmarshal(data, &m); err != nil {
 		return fmt.Errorf("corrupt mapping.yaml: %w", err)
@@ -76,18 +81,23 @@ func (s *fileBlobStore) loadCache() error {
 	if m.Entries == nil {
 		m.Entries = make(map[string]Blob)
 	}
+	if m.Aliases == nil {
+		m.Aliases = make(map[string]string)
+	}
 
 	// drop entries with empty hash (e.g. from an old format migration)
 	maps.DeleteFunc(m.Entries, func(_ string, v Blob) bool { return v.Hash == "" })
 
 	s.cache = m.Entries
+	s.aliases = m.Aliases
 	return nil
 }
 
 type fileBlobStore struct {
 	dataDir string
 	mu      sync.RWMutex
-	cache   map[string]Blob // in-memory cache, nil = not yet loaded
+	cache   map[string]Blob      // in-memory cache, nil = not yet loaded
+	aliases map[string]string    // alias → target path
 }
 
 func (s *fileBlobStore) Get(path string) (Blob, error) {
@@ -104,14 +114,14 @@ func (s *fileBlobStore) Set(path, hash string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cache[path] = Blob{Hash: hash, Time: time.Now().UnixMilli()}
-	return s.save(s.cache)
+	return s.save()
 }
 
 func (s *fileBlobStore) SetWithTime(path, hash string, time int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cache[path] = Blob{Hash: hash, Time: time}
-	return s.save(s.cache)
+	return s.save()
 }
 
 func (s *fileBlobStore) SetBatch(entries map[string]Blob) error {
@@ -120,7 +130,7 @@ func (s *fileBlobStore) SetBatch(entries map[string]Blob) error {
 	for k, v := range entries {
 		s.cache[k] = v
 	}
-	return s.save(s.cache)
+	return s.save()
 }
 
 func (s *fileBlobStore) DataDir() string { return s.dataDir }
@@ -136,17 +146,49 @@ func (s *fileBlobStore) Delete(path string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.cache, path)
-	return s.save(s.cache)
+	// Also delete any aliases pointing to this path
+	maps.DeleteFunc(s.aliases, func(_, target string) bool { return target == path })
+	return s.save()
 }
 
-func (s *fileBlobStore) save(entries map[string]Blob) error {
+func (s *fileBlobStore) SetAlias(alias, target string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.aliases == nil {
+		s.aliases = make(map[string]string)
+	}
+	s.aliases[alias] = target
+	return s.save()
+}
+
+func (s *fileBlobStore) GetAlias(alias string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	target, ok := s.aliases[alias]
+	if !ok {
+		return "", ErrPathNotFound
+	}
+	return target, nil
+}
+
+func (s *fileBlobStore) ListAliases() (map[string]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return maps.Clone(s.aliases), nil
+}
+
+func (s *fileBlobStore) save() error {
 	mappingPath := filepath.Join(s.dataDir, "mapping.yaml")
 	if err := os.MkdirAll(s.dataDir, 0o755); err != nil {
 		return err
 	}
 	m := struct {
-		Entries map[string]Blob `yaml:"entries"`
-	}{Entries: entries}
+		Entries map[string]Blob   `yaml:"entries"`
+		Aliases map[string]string `yaml:"aliases,omitempty"`
+	}{
+		Entries: s.cache,
+		Aliases: s.aliases,
+	}
 	data, err := yaml.Marshal(m)
 	if err != nil {
 		return err
@@ -154,7 +196,6 @@ func (s *fileBlobStore) save(entries map[string]Blob) error {
 	if err := os.WriteFile(mappingPath, data, 0o644); err != nil {
 		return err
 	}
-	s.cache = entries
 	return nil
 }
 

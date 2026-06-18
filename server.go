@@ -141,14 +141,20 @@ func handleList(w http.ResponseWriter, store BlobStore, dataDir string) {
 		return
 	}
 
-	type item struct {
-		Path  string `json:"path"`
-		Hash  string `json:"hash"`
-		Time  string `json:"time"`
-		Size  string `json:"size"`
-		epoch int64
+	aliases, err := store.ListAliases()
+	if err != nil {
+		aliases = make(map[string]string)
 	}
-	items := make([]item, 0, len(entries))
+
+	type item struct {
+		Path   string `json:"path"`
+		Hash   string `json:"hash"`
+		Time   string `json:"time"`
+		Size   string `json:"size"`
+		Alias  string `json:"alias,omitempty"`
+		epoch  int64
+	}
+	items := make([]item, 0, len(entries)+len(aliases))
 	for p, e := range entries {
 		t := time.UnixMilli(e.Time).UTC().Format(time.RFC3339Nano)
 		fi, err := os.Stat(blobPath(dataDir, e.Hash, true))
@@ -159,6 +165,20 @@ func handleList(w http.ResponseWriter, store BlobStore, dataDir string) {
 			s = "0.00MB"
 		}
 		items = append(items, item{Path: p, Hash: e.Hash, Time: t, Size: s, epoch: e.Time})
+	}
+	for alias, target := range aliases {
+		// Resolve the target to get hash/time/size
+		if e, err := store.Get(target); err == nil {
+			t := time.UnixMilli(e.Time).UTC().Format(time.RFC3339Nano)
+			fi, err := os.Stat(blobPath(dataDir, e.Hash, true))
+			var s string
+			if err == nil {
+				s = fmt.Sprintf("%.2fMB", float64(fi.Size())/(1024*1024))
+			} else {
+				s = "0.00MB"
+			}
+			items = append(items, item{Path: alias, Hash: e.Hash, Time: t, Size: s, Alias: target, epoch: e.Time})
+		}
 	}
 	slices.SortFunc(items, func(a, b item) int {
 		return cmp.Compare(b.epoch, a.epoch)
