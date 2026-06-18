@@ -44,6 +44,21 @@ func NewServer(dataDir string) http.Handler {
 			handleBuildAndUpload(w, r, store, dataDir, builder)
 			return
 		}
+		if strings.HasPrefix(remotePath, "/api/auth/") {
+			switch remotePath {
+			case "/api/auth/login":
+				handleAuthLogin(w, r)
+			case "/api/auth/callback":
+				handleAuthCallback(w, r)
+			case "/api/auth/logout":
+				handleAuthLogout(w, r)
+			case "/api/auth/user":
+				handleAuthUser(w, r)
+			default:
+				http.NotFound(w, r)
+			}
+			return
+		}
 
 		// Serve wasm_exec.js glue files
 	if remotePath == goWasmPrefix+"wasm_exec.js" {
@@ -99,6 +114,10 @@ func NewServer(dataDir string) http.Handler {
 			}
 			handleDownload(w, r, store, dataDir, remotePath)
 		case http.MethodDelete:
+			if authEnabled() && getUsername(r) == "" {
+				http.Error(w, "login required", http.StatusUnauthorized)
+				return
+			}
 			handleDelete(w, store, remotePath)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

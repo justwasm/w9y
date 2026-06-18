@@ -42,9 +42,14 @@ tr:hover td{background:#f5f5f5}
 .btn-add:hover{background:#0055aa}
 .btn-delete{padding:2px 8px;background:none;border:1px solid #ccc;border-radius:3px;font-size:.7rem;cursor:pointer;color:#888}
 .btn-delete:hover{border-color:#c62828;color:#c62828}
+.btn-login{padding:6px 14px;background:#24292e;color:#fff;border:none;border-radius:4px;font-size:.875rem;cursor:pointer;white-space:nowrap;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.btn-login:hover{background:#1a1e22}
+.btn-logout{padding:4px 10px;background:none;border:1px solid #ccc;border-radius:4px;font-size:.75rem;cursor:pointer;color:#666}
+.btn-logout:hover{border-color:#888}
 .status{padding:4px 8px;border-radius:4px;font-size:.75rem;margin-left:auto}
 .status-ok{background:#e8f5e9;color:#2e7d32}
 .status-err{background:#fce4ec;color:#c62828}
+.user-info{font-size:.8rem;color:#555;display:flex;align-items:center;gap:8px}
 footer{margin-top:32px;padding:16px 0;border-top:1px solid #ddd;color:#888;font-size:.75rem;text-align:center}
 .count{font-size:.75rem;color:#888}
 </style>
@@ -56,6 +61,7 @@ footer{margin-top:32px;padding:16px 0;border-top:1px solid #ddd;color:#888;font-
       <h1>w9y</h1>
       <span class="version">WebAssembly blob hosting</span>
       <div style="flex:1"></div>
+      <div id="auth-area"></div>
       <button class="btn-add" id="btn-upload">Upload</button>
     </header>
     <div class="toolbar">
@@ -82,6 +88,7 @@ footer{margin-top:32px;padding:16px 0;border-top:1px solid #ddd;color:#888;font-
   var sortAsc = false;
   var searchQ = '';
   var filterRuntime = 'all';
+  var user = null;
 
   function badge(path) {
     if (path.indexOf('/tinygo/') === 0) return '<span class="badge badge-tinygo">tinygo</span>';
@@ -124,6 +131,18 @@ footer{margin-top:32px;padding:16px 0;border-top:1px solid #ddd;color:#888;font-
     return sortAsc ? ' \u2191' : ' \u2193';
   }
 
+  function renderAuth() {
+    var el = document.getElementById('auth-area');
+    if (user && user.authenticated) {
+      el.innerHTML = '<span class="user-info">' + user.username +
+        '</span><a href="/api/auth/logout" class="btn-logout">Logout</a>';
+    } else {
+      el.innerHTML = '<a href="/api/auth/login" class="btn-login">' +
+        '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>' +
+        ' Login</a>';
+    }
+  }
+
   function renderTable() {
     var list = filtered();
     var el = document.getElementById('table');
@@ -135,13 +154,18 @@ footer{margin-top:32px;padding:16px 0;border-top:1px solid #ddd;color:#888;font-
       return;
     }
 
+    var canDelete = user && user.authenticated;
+    var delCol = canDelete ? '<th></th>' : '';
     var rows = list.map(function(e) {
+      var delBtn = canDelete
+        ? '<td><button class="btn-delete" data-path="' + e.path + '">x</button></td>'
+        : '';
       return '<tr>' +
         '<td class="path">' + badge(e.path) + ' <a href="' + e.path + '">' + e.path + '</a></td>' +
         '<td class="hash" title="' + e.hash + '">' + shortHash(e.hash) + '</td>' +
         '<td>' + new Date(e.time).toLocaleDateString() + '</td>' +
         '<td class="size">' + e.size + '</td>' +
-        '<td><button class="btn-delete" data-path="' + e.path + '">x</button></td>' +
+        delBtn +
       '</tr>';
     }).join('');
 
@@ -150,7 +174,7 @@ footer{margin-top:32px;padding:16px 0;border-top:1px solid #ddd;color:#888;font-
       '<th>Hash</th>' +
       '<th data-sort="time">Time' + sortIndicator('time') + '</th>' +
       '<th data-sort="size">Size' + sortIndicator('size') + '</th>' +
-      '<th></th>' +
+      delCol +
     '</tr></thead><tbody>' + rows + '</tbody></table>';
 
     el.querySelectorAll('th[data-sort]').forEach(function(th) {
@@ -167,8 +191,10 @@ footer{margin-top:32px;padding:16px 0;border-top:1px solid #ddd;color:#888;font-
         var path = btn.getAttribute('data-path');
         if (!confirm('Delete ' + path + '?')) return;
         fetch(path, { method: 'DELETE' })
-          .then(function(r) { return r.text(); })
-          .then(function() { loadEntries(); })
+          .then(function(r) {
+            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+            loadEntries();
+          })
           .catch(function(e) { alert('Delete failed: ' + e.message); });
       });
     });
@@ -197,6 +223,20 @@ footer{margin-top:32px;padding:16px 0;border-top:1px solid #ddd;color:#888;font-
       })
       .catch(function(e) {
         document.getElementById('table').innerHTML = '<div class="empty">Failed to load: ' + e.message + '</div>';
+      });
+  }
+
+  function loadUser() {
+    fetch('/api/auth/user')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        user = data;
+        renderAuth();
+        renderTable();
+      })
+      .catch(function() {
+        user = null;
+        renderAuth();
       });
   }
 
@@ -270,10 +310,10 @@ footer{margin-top:32px;padding:16px 0;border-top:1px solid #ddd;color:#888;font-
   }
 
   function closeModal() {
-    var root = document.getElementById('modal-root');
-    root.innerHTML = '';
+    document.getElementById('modal-root').innerHTML = '';
   }
 
+  loadUser();
   loadEntries();
 })();
 </script>
