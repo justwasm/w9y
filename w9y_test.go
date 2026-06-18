@@ -213,7 +213,7 @@ func TestRootListsEntriesSortedByTime(t *testing.T) {
 	}
 
 	server := NewServer(dir)
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/entries", nil)
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 

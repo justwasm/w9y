@@ -35,8 +35,13 @@ func NewServer(dataDir string) http.Handler {
 			return
 		}
 
-		if remotePath == "/" {
+		// API routes
+		if remotePath == "/api/entries" {
 			handleList(w, store, dataDir)
+			return
+		}
+		if remotePath == "/api/build" && r.Method == http.MethodPost {
+			handleBuildAndUpload(w, r, store, dataDir, builder)
 			return
 		}
 
@@ -88,6 +93,10 @@ func NewServer(dataDir string) http.Handler {
 		case http.MethodPut, http.MethodPost:
 			handleUpload(w, r, store, dataDir, remotePath)
 		case http.MethodGet, http.MethodHead:
+			if remotePath == "/" {
+				webHandler().ServeHTTP(w, r)
+				return
+			}
 			handleDownload(w, r, store, dataDir, remotePath)
 		case http.MethodDelete:
 			handleDelete(w, store, remotePath)
@@ -419,4 +428,49 @@ func verifyGzipHash(gzPath, wantSHA string) error {
 		return fmt.Errorf("hash mismatch: got %s, want %s", gotSHA, wantSHA)
 	}
 	return nil
+}
+
+func handleBuildAndUpload(w http.ResponseWriter, r *http.Request, store BlobStore, dataDir string, builder *GoWasmBuilder) {
+	var req struct {
+		Spec    string `json:"spec"`
+		Runtime string `json:"runtime"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if req.Spec == "" {
+		http.Error(w, "spec is required", http.StatusBadRequest)
+		return
+	}
+	if req.Runtime == "" {
+		req.Runtime = "go"
+	}
+
+	importPath, version, ok := strings.Cut(req.Spec, "@")
+	if !ok || importPath == "" {
+		http.Error(w, "spec must be pkg@version", http.StatusBadRequest)
+		return
+	}
+	if version == "" {
+		version = "latest"
+	}
+
+	prefix := "/" + req.Runtime + "/"
+	remotePath := prefix + req.Spec
+
+	var sha string
+	var err error
+	if req.Runtime == "tinygo" {
+		sha, err = builder.TinyBuildOrWait(importPath, version, remotePath, r.Context())
+	} else {
+		sha, err = builder.BuildOrWait(importPath, version, remotePath, r.Context())
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	fmt.Fprintf(w, "built %s -> blob/%s.wasm.gz", remotePath, sha)
 }

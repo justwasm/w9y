@@ -32,6 +32,11 @@ func runList(outputJSON bool) error {
 		return err
 	}
 
+	u.Path, err = url.JoinPath(u.Path, "/api/entries")
+	if err != nil {
+		return err
+	}
+
 	resp, err := http.Get(u.String())
 	if err != nil {
 		return err

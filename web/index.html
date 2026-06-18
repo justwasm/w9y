@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>w9y</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,sans-serif;background:#fafafa;color:#333;line-height:1.5}
+a{color:#0066cc;text-decoration:none}a:hover{text-decoration:underline}
+.container{max-width:960px;margin:0 auto;padding:16px}
+header{border-bottom:1px solid #ddd;padding:16px 0;margin-bottom:16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+header h1{font-size:1.5rem;font-weight:600}
+header .version{font-size:.75rem;color:#888;font-family:monospace}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.toolbar input,.toolbar select{padding:6px 10px;border:1px solid #ccc;border-radius:4px;font-size:.875rem}
+.toolbar input{flex:1;min-width:200px}
+.toolbar select{min-width:120px}
+table{width:100%;border-collapse:collapse;font-size:.875rem}
+th{text-align:left;padding:8px 10px;border-bottom:2px solid #ccc;background:#f5f5f5;font-weight:600;white-space:nowrap;cursor:pointer;user-select:none}
+th:hover{background:#eee}
+td{padding:6px 10px;border-bottom:1px solid #eee}
+tr:hover td{background:#f5f5f5}
+.path{font-family:monospace;font-size:.8rem;word-break:break-all}
+.hash{font-family:monospace;font-size:.75rem;color:#888}
+.size{text-align:right;white-space:nowrap}
+.empty{text-align:center;padding:40px;color:#888}
+.badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:.7rem;font-weight:600;text-transform:uppercase}
+.badge-go{background:#e8f4fd;color:#0066cc}
+.badge-tinygo{background:#fef3e2;color:#cc6600}
+.badge-manual{background:#e8f5e9;color:#2e7d32}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:100}
+.modal{background:#fff;border-radius:8px;padding:24px;width:90%;max-width:500px;box-shadow:0 8px 32px rgba(0,0,0,.2)}
+.modal h2{font-size:1.1rem;margin-bottom:12px}
+.modal label{display:block;font-size:.85rem;margin-bottom:4px;color:#555}
+.modal input,.modal select{width:100%;padding:6px 10px;border:1px solid #ccc;border-radius:4px;font-size:.875rem;margin-bottom:12px}
+.modal .actions{display:flex;gap:8px;justify-content:flex-end}
+.modal button{padding:6px 16px;border:none;border-radius:4px;font-size:.875rem;cursor:pointer}
+.modal .btn-primary{background:#0066cc;color:#fff}.modal .btn-primary:hover{background:#0055aa}
+.modal .btn-secondary{background:#eee;color:#333}.modal .btn-secondary:hover{background:#ddd}
+.btn-add{padding:6px 14px;background:#0066cc;color:#fff;border:none;border-radius:4px;font-size:.875rem;cursor:pointer;white-space:nowrap}
+.btn-add:hover{background:#0055aa}
+.btn-delete{padding:2px 8px;background:none;border:1px solid #ccc;border-radius:3px;font-size:.7rem;cursor:pointer;color:#888}
+.btn-delete:hover{border-color:#c62828;color:#c62828}
+.status{padding:4px 8px;border-radius:4px;font-size:.75rem;margin-left:auto}
+.status-ok{background:#e8f5e9;color:#2e7d32}
+.status-err{background:#fce4ec;color:#c62828}
+footer{margin-top:32px;padding:16px 0;border-top:1px solid #ddd;color:#888;font-size:.75rem;text-align:center}
+.count{font-size:.75rem;color:#888}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="container">
+    <header>
+      <h1>w9y</h1>
+      <span class="version">WebAssembly blob hosting</span>
+      <div style="flex:1"></div>
+      <button class="btn-add" id="btn-upload">Upload</button>
+    </header>
+    <div class="toolbar">
+      <input placeholder="Search path or hash..." id="search" />
+      <select id="filter">
+        <option value="all">All</option>
+        <option value="go">Go</option>
+        <option value="tinygo">TinyGo</option>
+        <option value="manual">Manual</option>
+      </select>
+      <span class="count" id="count"></span>
+    </div>
+    <div id="table"></div>
+    <footer>w9y &mdash; WebAssembly blob hosting with content-addressed storage</footer>
+  </div>
+</div>
+
+<div id="modal-root"></div>
+
+<script>
+(function() {
+  var allEntries = [];
+  var sortKey = 'time';
+  var sortAsc = false;
+  var searchQ = '';
+  var filterRuntime = 'all';
+
+  function badge(path) {
+    if (path.indexOf('/tinygo/') === 0) return '<span class="badge badge-tinygo">tinygo</span>';
+    if (path.indexOf('/go/') === 0) return '<span class="badge badge-go">go</span>';
+    return '<span class="badge badge-manual">manual</span>';
+  }
+
+  function shortHash(h) { return h ? h.slice(0, 12) : ''; }
+
+  function runtimeCount(prefix) {
+    return allEntries.filter(function(e) { return e.path.indexOf('/' + prefix + '/') === 0; }).length;
+  }
+
+  function filtered() {
+    var list = allEntries;
+    if (filterRuntime !== 'all') {
+      var prefix = '/' + filterRuntime + '/';
+      list = list.filter(function(e) { return e.path.indexOf(prefix) === 0; });
+    }
+    if (searchQ) {
+      var lq = searchQ.toLowerCase();
+      list = list.filter(function(e) {
+        return e.path.toLowerCase().indexOf(lq) !== -1 || e.hash.toLowerCase().indexOf(lq) !== -1;
+      });
+    }
+    list = list.slice().sort(function(a, b) {
+      var va, vb;
+      if (sortKey === 'path') { va = a.path; vb = b.path; }
+      else if (sortKey === 'size') { va = parseFloat(a.size); vb = parseFloat(b.size); }
+      else { va = a.time; vb = b.time; }
+      if (va < vb) return sortAsc ? -1 : 1;
+      if (va > vb) return sortAsc ? 1 : -1;
+      return 0;
+    });
+    return list;
+  }
+
+  function sortIndicator(key) {
+    if (sortKey !== key) return '';
+    return sortAsc ? ' \u2191' : ' \u2193';
+  }
+
+  function renderTable() {
+    var list = filtered();
+    var el = document.getElementById('table');
+    var countEl = document.getElementById('count');
+    countEl.textContent = list.length + ' / ' + allEntries.length + ' entries';
+
+    if (list.length === 0) {
+      el.innerHTML = '<div class="empty">' + (allEntries.length === 0 ? 'No entries yet' : 'No matches') + '</div>';
+      return;
+    }
+
+    var rows = list.map(function(e) {
+      return '<tr>' +
+        '<td class="path">' + badge(e.path) + ' <a href="' + e.path + '">' + e.path + '</a></td>' +
+        '<td class="hash" title="' + e.hash + '">' + shortHash(e.hash) + '</td>' +
+        '<td>' + new Date(e.time).toLocaleDateString() + '</td>' +
+        '<td class="size">' + e.size + '</td>' +
+        '<td><button class="btn-delete" data-path="' + e.path + '">x</button></td>' +
+      '</tr>';
+    }).join('');
+
+    el.innerHTML = '<table><thead><tr>' +
+      '<th data-sort="path">Path' + sortIndicator('path') + '</th>' +
+      '<th>Hash</th>' +
+      '<th data-sort="time">Time' + sortIndicator('time') + '</th>' +
+      '<th data-sort="size">Size' + sortIndicator('size') + '</th>' +
+      '<th></th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table>';
+
+    el.querySelectorAll('th[data-sort]').forEach(function(th) {
+      th.addEventListener('click', function() {
+        var key = th.getAttribute('data-sort');
+        if (sortKey === key) sortAsc = !sortAsc;
+        else { sortKey = key; sortAsc = false; }
+        renderTable();
+      });
+    });
+
+    el.querySelectorAll('.btn-delete').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var path = btn.getAttribute('data-path');
+        if (!confirm('Delete ' + path + '?')) return;
+        fetch(path, { method: 'DELETE' })
+          .then(function(r) { return r.text(); })
+          .then(function() { loadEntries(); })
+          .catch(function(e) { alert('Delete failed: ' + e.message); });
+      });
+    });
+  }
+
+  function updateFilterOptions() {
+    var sel = document.getElementById('filter');
+    var goCount = runtimeCount('go');
+    var tinyCount = runtimeCount('tinygo');
+    var manualCount = allEntries.length - goCount - tinyCount;
+    sel.innerHTML =
+      '<option value="all">All (' + allEntries.length + ')</option>' +
+      '<option value="go">Go (' + goCount + ')</option>' +
+      '<option value="tinygo">TinyGo (' + tinyCount + ')</option>' +
+      '<option value="manual">Manual (' + manualCount + ')</option>';
+    sel.value = filterRuntime;
+  }
+
+  function loadEntries() {
+    fetch('/api/entries')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        allEntries = data;
+        updateFilterOptions();
+        renderTable();
+      })
+      .catch(function(e) {
+        document.getElementById('table').innerHTML = '<div class="empty">Failed to load: ' + e.message + '</div>';
+      });
+  }
+
+  document.getElementById('search').addEventListener('input', function(e) {
+    searchQ = e.target.value;
+    renderTable();
+  });
+
+  document.getElementById('filter').addEventListener('change', function(e) {
+    filterRuntime = e.target.value;
+    renderTable();
+  });
+
+  document.getElementById('btn-upload').addEventListener('click', function() {
+    showModal();
+  });
+
+  function showModal() {
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML =
+      '<div class="modal">' +
+        '<h2>Build &amp; Upload</h2>' +
+        '<label>Module spec</label>' +
+        '<input id="m-spec" placeholder="e.g. golang.org/dl/gotip@latest" />' +
+        '<label>Runtime</label>' +
+        '<select id="m-runtime"><option value="go">Go</option><option value="tinygo">TinyGo</option></select>' +
+        '<div id="m-status"></div>' +
+        '<div class="actions">' +
+          '<button class="btn-secondary" id="m-cancel">Cancel</button>' +
+          '<button class="btn-primary" id="m-submit">Build</button>' +
+        '</div>' +
+      '</div>';
+
+    document.getElementById('modal-root').appendChild(overlay);
+
+    overlay.addEventListener('click', function(e) {
+      if (e.target === overlay) closeModal();
+    });
+
+    document.getElementById('m-cancel').addEventListener('click', closeModal);
+
+    document.getElementById('m-submit').addEventListener('click', function() {
+      var spec = document.getElementById('m-spec').value.trim();
+      var runtime = document.getElementById('m-runtime').value;
+      if (!spec) return;
+
+      var submitBtn = document.getElementById('m-submit');
+      var statusEl = document.getElementById('m-status');
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Building...';
+      statusEl.innerHTML = '';
+
+      fetch('/api/build', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({spec: spec, runtime: runtime})
+      })
+      .then(function(r) { return r.text().then(function(t) { return {ok: r.ok, text: t}; }); })
+      .then(function(res) {
+        if (!res.ok) throw new Error(res.text);
+        statusEl.innerHTML = '<div class="status status-ok">' + res.text + '</div>';
+        setTimeout(function() { closeModal(); loadEntries(); }, 1500);
+      })
+      .catch(function(e) {
+        statusEl.innerHTML = '<div class="status status-err">Error: ' + e.message + '</div>';
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Build';
+      });
+    });
+  }
+
+  function closeModal() {
+    var root = document.getElementById('modal-root');
+    root.innerHTML = '';
+  }
+
+  loadEntries();
+})();
+</script>
+</body>
+</html>

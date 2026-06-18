@@ -32,6 +32,10 @@ func backupRemote(client *http.Client, host, destDir string) error {
 	if err != nil {
 		return err
 	}
+	u.Path, err = url.JoinPath(u.Path, "/api/entries")
+	if err != nil {
+		return err
+	}
 
 	resp, err := client.Get(u.String())
 	if err != nil {
