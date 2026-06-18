@@ -288,7 +288,7 @@ func (b *GoWasmBuilder) doBuild(reqCtx context.Context, importPath, version, rem
 		if _, err := cloneGist(ctx, importPath, version, gistDir); err != nil {
 			return "", err
 		}
-		wasmPath, err = buildGoModule(ctx, gistDir, "", tmpDir)
+		wasmPath, err = buildGoModule(ctx, gistDir, "", tmpDir, false)
 	} else {
 		// Resolve version and download module to cache
 		resolved, err := resolveSpec(ctx, importPath, version)
@@ -296,7 +296,7 @@ func (b *GoWasmBuilder) doBuild(reqCtx context.Context, importPath, version, rem
 			return "", fmt.Errorf("resolve: %w", err)
 		}
 		// Build from source (copy cache → tidy → go build)
-		wasmPath, err = buildFromSource(ctx, resolved, tmpDir)
+		wasmPath, err = buildFromSource(ctx, resolved, tmpDir, false)
 	}
 	if err != nil {
 		return "", err

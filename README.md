@@ -269,7 +269,7 @@ The proxy also handles `?go-get=1` discovery, so gist modules can be resolved by
 | `gc` | Find/remove orphan blobs |
 | `check` | Verify blob integrity |
 | `build` | Build Go WASM binary locally |
-| `tinybuild` | Build Go WASM binary locally with TinyGo |
+| `build` | Build Go WASM binary locally (use `--tinygo` for TinyGo) |
 | `semver` | Check if a string is a valid semantic version |
 
 ## Docker

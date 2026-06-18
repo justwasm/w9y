@@ -17,23 +17,28 @@ import (
 
 func newBuildCommand() *cobra.Command {
 	var keepTmp bool
+	var useTinyGo bool
 	cmd := &cobra.Command{
 		Use:   "build <pkg>@<version>",
 		Short: "Build a Go WASM binary locally",
 		Long: `Build a Go WASM binary from a Go package path and version, then print the
 output path. Useful for local debugging of build issues.
 
+Use --tinygo to build with TinyGo instead of the standard Go compiler.
+
 Examples:
   w9y build github.com/btwiuse/w9y/cmd/w9y@latest
   w9y build github.com/btwiuse/w9y/cmd/w9y@v0.0.1
   w9y build github.com/btwiuse/w9y/cmd/w9y@b45ecc4
+  w9y build --tinygo github.com/user/repo/cmd/app@v0.1.0
 `,
 		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			return runBuild(args[0], keepTmp)
+			return runBuild(args[0], keepTmp, useTinyGo)
 		},
 	}
 	cmd.Flags().BoolVar(&keepTmp, "keep-tmp", false, "preserve temporary build directory for debugging")
+	cmd.Flags().BoolVar(&useTinyGo, "tinygo", false, "use TinyGo instead of the standard Go compiler")
 	return cmd
 }
 
@@ -107,7 +112,7 @@ func resolveSpec(ctx context.Context, importPath, version string) (resolvedSpec,
 	return resolvedSpec{}, fmt.Errorf("could not resolve %s@%s", importPath, version)
 }
 
-func buildGoModule(ctx context.Context, modDir string, subPkg string, tmpDir string) (string, error) {
+func buildGoModule(ctx context.Context, modDir string, subPkg string, tmpDir string, useTinyGo bool) (string, error) {
 	// Initialize go.mod if missing (e.g. for gists without one)
 	if _, err := os.Stat(filepath.Join(modDir, "go.mod")); os.IsNotExist(err) {
 		slog.Info("go mod init gist", "dir", modDir)
@@ -176,16 +181,26 @@ func buildGoModule(ctx context.Context, modDir string, subPkg string, tmpDir str
 	}
 
 	wasmPath := filepath.Join(tmpDir, "output.wasm")
-	args := []string{"build", "-trimpath", "-ldflags", "-s -w", "-o", wasmPath, "."}
-	slog.Info("go " + strings.Join(args, " "), "dir", buildDir)
-	buildCmd := exec.CommandContext(ctx, "go", args...)
-	buildCmd.Dir = buildDir
-	buildCmd.Env = append(os.Environ(),
-		"GOOS=js",
-		"GOARCH=wasm",
-		"GOWORK=off",
-		"CGO_ENABLED=0",
-	)
+
+	var buildCmd *exec.Cmd
+	if useTinyGo {
+		args := []string{"build", "-o", wasmPath, "-target=wasm", "."}
+		slog.Info("tinygo " + strings.Join(args, " "), "dir", buildDir)
+		buildCmd = exec.CommandContext(ctx, "tinygo", args...)
+		buildCmd.Dir = buildDir
+		buildCmd.Env = append(os.Environ(), "GOWORK=off")
+	} else {
+		args := []string{"build", "-trimpath", "-ldflags", "-s -w", "-o", wasmPath, "."}
+		slog.Info("go " + strings.Join(args, " "), "dir", buildDir)
+		buildCmd = exec.CommandContext(ctx, "go", args...)
+		buildCmd.Dir = buildDir
+		buildCmd.Env = append(os.Environ(),
+			"GOOS=js",
+			"GOARCH=wasm",
+			"GOWORK=off",
+			"CGO_ENABLED=0",
+		)
+	}
 	buildCmd.Stderr = new(bytes.Buffer)
 	if err := buildCmd.Run(); err != nil {
 		stderr := buildCmd.Stderr.(*bytes.Buffer).String()
@@ -202,17 +217,17 @@ func buildGoModule(ctx context.Context, modDir string, subPkg string, tmpDir str
 // to a writable tmpdir, runs go mod tidy, then builds with go build GOOS=js
 // GOARCH=wasm. This approach treats the module as the main module, so replace
 // directives in go.mod are honored (unlike go install which rejects them).
-func buildFromSource(ctx context.Context, spec resolvedSpec, tmpDir string) (string, error) {
+func buildFromSource(ctx context.Context, spec resolvedSpec, tmpDir string, useTinyGo bool) (string, error) {
 	// Copy module source from cache to tmpdir (cache is often read-only)
 	modDir := filepath.Join(tmpDir, "mod")
 	if err := os.CopyFS(modDir, os.DirFS(spec.Dir)); err != nil {
 		return "", fmt.Errorf("copy module source: %w", err)
 	}
 
-	return buildGoModule(ctx, modDir, spec.Path, tmpDir)
+	return buildGoModule(ctx, modDir, spec.Path, tmpDir, useTinyGo)
 }
 
-func runBuild(spec string, keepTmp bool) error {
+func runBuild(spec string, keepTmp bool, useTinyGo bool) error {
 	importPath, version, ok := strings.Cut(spec, "@")
 	if !ok || importPath == "" {
 		return fmt.Errorf("usage: w9y build <pkg>@<version> (got %q)", spec)
@@ -244,7 +259,7 @@ func runBuild(spec string, keepTmp bool) error {
 		}
 		parts := strings.Split(strings.TrimRight(importPath, "/"), "/")
 		pkgBase = parts[len(parts)-1]
-		wasmPath, err = buildGoModule(ctx, gistDir, "", tmpDir)
+		wasmPath, err = buildGoModule(ctx, gistDir, "", tmpDir, useTinyGo)
 	} else {
 		// Resolve version and download module in one step
 		resolved, err := resolveSpec(ctx, importPath, version)
@@ -255,7 +270,7 @@ func runBuild(spec string, keepTmp bool) error {
 		if resolved.Path == "" {
 			pkgBase = filepath.Base(resolved.Pkg)
 		}
-		wasmPath, err = buildFromSource(ctx, resolved, tmpDir)
+		wasmPath, err = buildFromSource(ctx, resolved, tmpDir, useTinyGo)
 	}
 	if err != nil {
 		return err
