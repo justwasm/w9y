@@ -2,7 +2,7 @@
 
 w9y is a WebAssembly blob hosting service with content-addressed storage, automatic gzip serving, on-demand Go WASM builds, and a Go module proxy for GitHub Gists.
 
-Upload a `.wasm` file once, then serve any named `.wasm` path with gzip compression. The path is mapped to a deduplicated blob store via `mapping.yaml`, so multiple public paths can point at the same uploaded bytes. CORS is enabled by default, and no authentication is required yet.
+Upload a `.wasm` file once, then serve any named `.wasm` path with gzip compression. Each path is a symlink under `data/paths/` pointing to a deduplicated blob store under `data/blob/`, so multiple public paths can point at the same uploaded bytes. CORS is enabled by default, and no authentication is required yet.
 
 ## Install
 
@@ -32,25 +32,22 @@ w9y server -check
 
 ## Storage Layout
 
-Uploaded blobs are stored by the SHA-256 hash of the original wasm bytes. A `mapping.yaml` file maps public paths to blob hashes:
+Uploaded blobs are stored by the SHA-256 hash of the original wasm bytes. Paths are symlinks under `data/paths/` pointing into the blob store:
 
 ```text
 data/
-  mapping.yaml
+  paths/
+    foo.wasm -> ../blob/<sha256>.wasm.gz  # entry
+    sub/
+      bar.wasm -> ../../blob/<sha256>.wasm.gz
+    go/
+      pkg@v1.0.0 -> ../../../blob/<sha256>.wasm.gz
+      pkg@latest -> pkg@v1.0.0          # alias (points to another path)
   blob/
     <sha256>.wasm.gz
 ```
 
-```yaml
-# mapping.yaml
-entries:
-  /foo.wasm:
-    sha: abc123...
-    time: 1718000000000
-  /pkg/bar.wasm:
-    sha: def456...
-    time: 1718000001000
-```
+Each symlink's mtime (or a `.time` sidecar file) records the upload timestamp. Aliases are symlinks pointing to another path entry rather than to a blob. Listing entries means walking the `data/paths/` directory tree.
 
 Uploads to `/blob` or `/blob/**` are rejected. The `/blob` namespace is reserved for content-addressed storage.
 
@@ -112,11 +109,11 @@ Or pass the directory as a positional argument:
 w9y backup /tmp/mybackup
 ```
 
-The backup preserves all blobs and the mapping file. Progress is shown on stderr.
+The backup preserves all blobs and the symlink entries. Progress is shown on stderr.
 
 ## Restore
 
-Upload all blobs and mapping from a local backup to the remote server:
+Upload all blobs and symlink entries from a local backup to the remote server:
 
 ```sh
 w9y restore
@@ -138,7 +135,7 @@ Progress is shown on stderr.
 
 ## GC (Garbage Collection)
 
-Find blobs in storage that are not referenced by any mapping entry:
+Find blobs in storage that are not referenced by any path entry:
 
 ```sh
 w9y gc

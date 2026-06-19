@@ -52,7 +52,6 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 			return err
 		}
 
-		// Only open the file when we actually need to upload it
 		var f *os.File
 		var fi os.FileInfo
 		if !exists {
@@ -129,6 +128,35 @@ func restoreRemote(client *http.Client, host, backupDir string) error {
 		}
 	}
 
-	slog.Info("restore complete", "uploaded", uploaded, "linked", linked)
+	// Restore aliases
+	aliases, err := store.ListAliases()
+	if err != nil {
+		return err
+	}
+	var restoredAliases int
+	for alias, target := range aliases {
+		u, _ := url.Parse(host)
+		u.Path, _ = url.JoinPath(u.Path, alias)
+		u.RawQuery = "alias=" + url.QueryEscape(target)
+
+		req, err := http.NewRequest(http.MethodPut, u.String(), http.NoBody)
+		if err != nil {
+			return fmt.Errorf("restore alias %s: %v", alias, err)
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("restore alias %s: %v", alias, err)
+		}
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fmt.Errorf("restore alias %s: %s: %s", alias, resp.Status, strings.TrimSpace(string(bodyBytes)))
+		}
+		slog.Info("restored alias", "alias", alias, "target", target)
+		restoredAliases++
+	}
+
+	slog.Info("restore complete", "uploaded", uploaded, "linked", linked, "aliases", restoredAliases)
 	return nil
 }

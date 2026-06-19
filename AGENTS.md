@@ -53,37 +53,39 @@ No Makefile, no CI configs, no task runner.
 2. Client does `HEAD /blob/<sha256>.wasm.gz` to check if blob exists on server
 3. If exists: sends `PUT /path.wasm?sha256=<sha>` with no body (link-only)
 4. If not: gzips locally, sends `PUT /path.wasm?sha256=<sha>` with gzip body
-5. Server stores gzip blob at `data/blob/<sha256>.wasm.gz`, updates `data/mapping.yaml`
+5. Server stores gzip blob at `data/blob/<sha256>.wasm.gz`, creates symlink at `data/paths/<path>` → `../blob/<sha256>.wasm.gz`
 
 ### Download
-1. Request hits `GET /path.wasm` → server looks up path in `mapping.yaml`
-2. Gets SHA, opens `data/blob/<sha256>.wasm.gz`
+1. Request hits `GET /path.wasm` → follows symlink `data/paths/<path>` to resolve SHA
+2. Gets SHA from symlink target, opens `data/blob/<sha256>.wasm.gz`
 3. Serves with `Content-Type: application/wasm`, `Content-Encoding: gzip`
 4. **Blob paths** (`/blob/<sha>.wasm.gz`) served as raw gzip — no `Content-Encoding`, just raw bytes
 
 ### Go WASM (`/go/` paths)
 1. `GET /go/<import-path>@<version>` → resolves version, builds via `go install` with `GOOS=js GOARCH=wasm`
-2. Result stored as a regular blob in the same store + mapping entry
+2. Result stored as a regular blob in the store + symlink entry
 3. Concurrent requests for the same build coordinate via a channel-based wait pattern (`buildOrWait`)
 4. Non-canonical refs (commit hashes, branches) resolved to pseudo-versions via `go list -m -json`
 5. No version / `@latest` → resolves latest version and redirects (302)
 
-## Storage Layout
+## Storage Layout (Symlinks)
 
 ```
 data/
-  mapping.yaml       # YAML: path → {sha, time}
+  paths/
+    foo.wasm -> ../blob/<sha256>.wasm.gz    # entry symlink
+    sub/
+      bar.wasm -> ../../blob/<sha256>.wasm.gz
+    go/
+      pkg@v1.0.0 -> ../../../blob/<sha256>.wasm.gz
+      pkg@latest -> pkg@v1.0.0              # alias symlink (points to another path)
   blob/
     <sha256>.wasm.gz  # gzip-compressed wasm binary
 ```
 
-`mapping.yaml` structure:
-```yaml
-entries:
-  /foo.wasm:
-    sha: abc123...
-    time: 1718000000000  # Unix milliseconds
-```
+Each path is a symlink under `data/paths/`. Entries point to `../blob/<sha>.wasm.gz`;
+aliases point to another relative path. The symlink's mtime (or a `.time` sidecar)
+records the upload timestamp. Listing means walking the `data/paths/` tree.
 
 ## CLI Subcommands
 
@@ -93,8 +95,8 @@ All subcommands use Go's `flag` package with `flag.ContinueOnError`. Flag parsin
 |---|---|---|
 | `server` | `-port`, `-check` | Also reads `PORT` and `DATA_DIR` env vars |
 | `upload` | `--to` | Single file arg. Client-side gzip + dedup |
-| `backup` | `-data-dir` | Downloads mapping + all blobs from remote |
-| `restore` | `-data-dir` | Uploads mapping + blobs to remote |
+| `backup` | `-data-dir` | Downloads entries + all blobs from remote |
+| `restore` | `-data-dir` | Uploads entries + blobs to remote |
 | `gc` | `-data-dir`, `-clean` | Dry-run by default; `-clean` deletes orphans |
 | `check` | `-data-dir` | Validates SHA256 + WASM magic bytes for all blobs |
 
@@ -139,19 +141,18 @@ Remote host is set via `W9Y` env var (default: `https://w9y.up.railway.app/`).
 | `isBlobRemotePath(path)` | Returns true for `/blob` or `/blob/*` |
 | `sha256Hex(body)` | SHA-256 of raw bytes as hex string |
 | `contentType(path)` | Returns `application/wasm` for `.wasm`, otherwise uses `mime.TypeByExtension` |
-| `loadMapping/saveMapping` | Read/write `data/mapping.yaml` |
+| `blobSymlinkTarget`, `storePath` | Symlink path construction from remote path and hash |
 | `gzipBytes(src)` | Gzip with `BestCompression` |
 | `getenv(key, fallback)` | Env var with fallback |
 
 ### Naming Conventions
 - Functions: `camelCase` (unexported) and `PascalCase` (exported — only `Run`, `NewServer`).
 - Error messages: lowercase, no trailing punctuation.
-- Variables: short, idiomatic Go (e.g., `m` for mapping, `sha` for hash, `gz` for gzip bytes, `gr` for gzip reader, `gzw` for gzip writer).
+- Variables: short, idiomatic Go (e.g., `sha` for hash, `gz` for gzip bytes, `gr` for gzip reader, `gzw` for gzip writer).
 - Tests: `Test<Feature><Scenario>`.
-- Import path: use `gopkg.in/yaml.v3` for YAML (the only dependency beyond stdlib).
 
 ### Other Gotchas
-- `handleList` at `/` returns JSON sorted by time descending. All paths not in `mapping.yaml` get 404.
+- `handleList` at `/` returns JSON sorted by time descending. All paths not in the `data/paths/` tree get 404.
 - Upload uses `os.Rename` from temp file to final path — atomic on the same filesystem.
 - `backup` creates a transport clone with `DisableCompression = true` so blob downloads aren't double-decompressed by the HTTP transport.
 - `backup` deduplicates by SHA256 across entries (multiple paths can point to same blob).

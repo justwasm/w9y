@@ -9,22 +9,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"mime"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 const defaultDataDir = "data"
+const pathsDirName = "paths"
 
 var defaultHost = cmp.Or(os.Getenv("W9Y"), "https://w9y.up.railway.app/")
 
@@ -33,16 +32,15 @@ var dataDir string
 var ErrPathNotFound = errors.New("path not found")
 
 type Blob struct {
-	Hash string `yaml:"hash" json:"hash"`
-	Time int64  `yaml:"time" json:"time"`
+	Hash string `json:"hash"`
+	Time int64  `json:"time"`
 }
 
-// BlobStore provides concurrent-safe access to the path→blob mapping.
+// BlobStore provides access to the path→blob mapping backed by symlinks.
 type BlobStore interface {
 	Get(path string) (Blob, error)
 	Set(path, hash string) error
 	SetWithTime(path, hash string, time int64) error
-	SetBatch(entries map[string]Blob) error
 	Delete(path string) error
 	List() (map[string]Blob, error)
 	SetAlias(alias, target string) error
@@ -51,152 +49,276 @@ type BlobStore interface {
 	DataDir() string
 }
 
-// NewBlobStore returns a file-based BlobStore backed by mapping.yaml in dataDir.
+// NewBlobStore returns a symlink-backed BlobStore.
+//
+// Each path entry is a symlink under <dataDir>/paths/ pointing to
+// ../blob/<sha256>.wasm.gz. The symlink's own mtime records the upload
+// time. Aliases are symlinks whose target is another path (not a blob).
 func NewBlobStore(dataDir string) BlobStore {
-	s := &fileBlobStore{dataDir: dataDir}
-	if err := s.loadCache(); err != nil {
-		s.cache = make(map[string]Blob)
-	}
-	return s
+	return &symlinkBlobStore{dataDir: dataDir}
 }
 
-func (s *fileBlobStore) loadCache() error {
-	mappingPath := filepath.Join(s.dataDir, "mapping.yaml")
-	data, err := os.ReadFile(mappingPath)
+// symlinkBlobStore stores path→blob mappings as filesystem symlinks.
+type symlinkBlobStore struct {
+	dataDir string
+}
+
+func (s *symlinkBlobStore) storePath(remotePath string) string {
+	clean := strings.TrimPrefix(remotePath, "/")
+	return filepath.Join(s.dataDir, pathsDirName, filepath.FromSlash(clean))
+}
+
+// blobSymlinkTarget returns the relative symlink target for a blob at the
+// given directory depth under dataDir/paths/.
+func blobSymlinkTarget(hash string, depth int) string {
+	parts := make([]string, depth)
+	for i := range parts {
+		parts[i] = ".."
+	}
+	parts = append(parts, "blob", hash+".wasm.gz")
+	return filepath.Join(parts...)
+}
+
+// isBlobSymlink returns true if the (already Clean'd) symlink target
+// points into a blob/ directory.
+func isBlobSymlink(target string) bool {
+	return filepath.Base(filepath.Dir(target)) == "blob"
+}
+
+// hashFromSymlink extracts the SHA-256 hex from a blob symlink target.
+func hashFromSymlink(target string) string {
+	cleaned := filepath.Clean(target)
+	sha, ok := strings.CutSuffix(filepath.Base(cleaned), ".wasm.gz")
+	if !ok || len(sha) != 64 {
+		return ""
+	}
+	return sha
+}
+
+// walkEntries iterates the paths/ directory, calling fn for each blob
+// symlink (not aliases). If fn returns true, the entry is included in the
+// returned map. An empty result (nil error) means the paths directory
+// doesn't exist or is empty.
+func (s *symlinkBlobStore) walkEntries(fn func(remotePath, sha string, mtime time.Time) bool) (map[string]Blob, error) {
+	pathsDir := filepath.Join(s.dataDir, pathsDirName)
+	result := make(map[string]Blob)
+
+	if _, err := os.Stat(pathsDir); os.IsNotExist(err) {
+		return result, nil
+	}
+
+	err := filepath.WalkDir(pathsDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip inaccessible entries
+		}
+		if d.IsDir() || d.Type()&os.ModeSymlink == 0 {
+			return nil
+		}
+		target, err := os.Readlink(path)
+		if err != nil {
+			return nil
+		}
+		if !isBlobSymlink(filepath.Clean(target)) {
+			return nil
+		}
+		sha := hashFromSymlink(target)
+		if sha == "" {
+			return nil
+		}
+		rel, err := filepath.Rel(pathsDir, path)
+		if err != nil {
+			return nil
+		}
+		remotePath := "/" + filepath.ToSlash(rel)
+		fi, err := os.Lstat(path)
+		if err != nil {
+			return nil
+		}
+		if fn != nil && !fn(remotePath, sha, fi.ModTime()) {
+			return nil
+		}
+		result[remotePath] = Blob{Hash: sha, Time: s.readTimeFile(remotePath)}
+		return nil
+	})
+	if os.IsNotExist(err) {
+		return result, nil
+	}
+	return result, err
+}
+
+func (s *symlinkBlobStore) Get(path string) (Blob, error) {
+	sp := s.storePath(path)
+	target, err := os.Readlink(sp)
 	if err != nil {
 		if os.IsNotExist(err) {
-			s.cache = make(map[string]Blob)
-			s.aliases = make(map[string]string)
-			return nil
+			return Blob{}, ErrPathNotFound
+		}
+		return Blob{}, err
+	}
+	if !isBlobSymlink(filepath.Clean(target)) {
+		return Blob{}, ErrPathNotFound
+	}
+	sha := hashFromSymlink(target)
+	if sha == "" {
+		return Blob{}, ErrPathNotFound
+	}
+	tm := s.readTimeFile(path)
+	return Blob{Hash: sha, Time: tm}, nil
+}
+
+func (s *symlinkBlobStore) Set(path, hash string) error {
+	return s.SetWithTime(path, hash, time.Now().UnixMilli())
+}
+
+func (s *symlinkBlobStore) SetWithTime(path, hash string, t int64) error {
+	sp := s.storePath(path)
+	if err := os.MkdirAll(filepath.Dir(sp), 0o755); err != nil {
+		return err
+	}
+
+	rel, err := filepath.Rel(filepath.Join(s.dataDir, pathsDirName), filepath.Dir(sp))
+	if err != nil {
+		return err
+	}
+	depth := 1
+	if rel != "." {
+		depth = len(strings.Split(rel, string(filepath.Separator))) + 1
+	}
+	target := blobSymlinkTarget(hash, depth)
+
+	os.Remove(sp)
+	if err := os.Symlink(target, sp); err != nil {
+		return err
+	}
+
+	// Store time in a sidecar file — os.Chtimes follows symlinks on
+	// some platforms (macOS) and fails when the blob doesn't exist yet.
+	return s.writeTimeFile(path, t)
+}
+
+func (s *symlinkBlobStore) Delete(path string) error {
+	sp := s.storePath(path)
+	if err := os.Remove(sp); err != nil {
+		if os.IsNotExist(err) {
+			return ErrPathNotFound
 		}
 		return err
 	}
-	var m struct {
-		Entries map[string]Blob     `yaml:"entries"`
-		Aliases map[string]string   `yaml:"aliases,omitempty"`
-	}
-	if err := yaml.Unmarshal(data, &m); err != nil {
-		return fmt.Errorf("corrupt mapping.yaml: %w", err)
-	}
-	if m.Entries == nil {
-		m.Entries = make(map[string]Blob)
-	}
-	if m.Aliases == nil {
-		m.Aliases = make(map[string]string)
-	}
-
-	// drop entries with empty hash (e.g. from an old format migration)
-	maps.DeleteFunc(m.Entries, func(_ string, v Blob) bool { return v.Hash == "" })
-
-	s.cache = m.Entries
-	s.aliases = m.Aliases
+	os.Remove(s.timeFilePath(path))
 	return nil
 }
 
-type fileBlobStore struct {
-	dataDir string
-	mu      sync.RWMutex
-	cache   map[string]Blob      // in-memory cache, nil = not yet loaded
-	aliases map[string]string    // alias → target path
+func (s *symlinkBlobStore) List() (map[string]Blob, error) {
+	return s.walkEntries(nil)
 }
 
-func (s *fileBlobStore) Get(path string) (Blob, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	b, ok := s.cache[path]
-	if !ok {
-		return Blob{}, ErrPathNotFound
-	}
-	return b, nil
-}
-
-func (s *fileBlobStore) Set(path, hash string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.cache[path] = Blob{Hash: hash, Time: time.Now().UnixMilli()}
-	return s.save()
-}
-
-func (s *fileBlobStore) SetWithTime(path, hash string, time int64) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.cache[path] = Blob{Hash: hash, Time: time}
-	return s.save()
-}
-
-func (s *fileBlobStore) SetBatch(entries map[string]Blob) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for k, v := range entries {
-		s.cache[k] = v
-	}
-	return s.save()
-}
-
-func (s *fileBlobStore) DataDir() string { return s.dataDir }
-
-func (s *fileBlobStore) List() (map[string]Blob, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	result := maps.Clone(s.cache)
-	return result, nil
-}
-
-func (s *fileBlobStore) Delete(path string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.cache, path)
-	// Also delete any aliases pointing to this path
-	maps.DeleteFunc(s.aliases, func(_, target string) bool { return target == path })
-	return s.save()
-}
-
-func (s *fileBlobStore) SetAlias(alias, target string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.aliases == nil {
-		s.aliases = make(map[string]string)
-	}
-	s.aliases[alias] = target
-	return s.save()
-}
-
-func (s *fileBlobStore) GetAlias(alias string) (string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	target, ok := s.aliases[alias]
-	if !ok {
-		return "", ErrPathNotFound
-	}
-	return target, nil
-}
-
-func (s *fileBlobStore) ListAliases() (map[string]string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return maps.Clone(s.aliases), nil
-}
-
-func (s *fileBlobStore) save() error {
-	mappingPath := filepath.Join(s.dataDir, "mapping.yaml")
-	if err := os.MkdirAll(s.dataDir, 0o755); err != nil {
+func (s *symlinkBlobStore) SetAlias(alias, target string) error {
+	sp := s.storePath(alias)
+	if err := os.MkdirAll(filepath.Dir(sp), 0o755); err != nil {
 		return err
 	}
-	m := struct {
-		Entries map[string]Blob   `yaml:"entries"`
-		Aliases map[string]string `yaml:"aliases,omitempty"`
-	}{
-		Entries: s.cache,
-		Aliases: s.aliases,
-	}
-	data, err := yaml.Marshal(m)
+	// Create relative symlink: alias → target
+	absTarget := filepath.Join(s.dataDir, pathsDirName, strings.TrimPrefix(target, "/"))
+	relTarget, err := filepath.Rel(filepath.Dir(sp), absTarget)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(mappingPath, data, 0o644); err != nil {
-		return err
+	os.Remove(sp)
+	return os.Symlink(relTarget, sp)
+}
+
+func (s *symlinkBlobStore) GetAlias(alias string) (string, error) {
+	sp := s.storePath(alias)
+	target, err := os.Readlink(sp)
+	if err != nil {
+		return "", ErrPathNotFound
 	}
-	return nil
+	cleaned := filepath.Clean(target)
+	if isBlobSymlink(cleaned) {
+		return "", ErrPathNotFound
+	}
+	// Resolve relative to symlink's directory
+	absTarget := filepath.Join(filepath.Dir(sp), cleaned)
+	relTarget, err := filepath.Rel(filepath.Join(s.dataDir, pathsDirName), absTarget)
+	if err != nil {
+		return "", err
+	}
+	return "/" + filepath.ToSlash(relTarget), nil
+}
+
+func (s *symlinkBlobStore) ListAliases() (map[string]string, error) {
+	pathsDir := filepath.Join(s.dataDir, pathsDirName)
+	result := make(map[string]string)
+
+	if _, err := os.Stat(pathsDir); os.IsNotExist(err) {
+		return result, nil
+	}
+
+	err := filepath.WalkDir(pathsDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() || d.Type()&os.ModeSymlink == 0 {
+			return nil
+		}
+		target, err := os.Readlink(path)
+		if err != nil {
+			return nil
+		}
+		cleaned := filepath.Clean(target)
+		if isBlobSymlink(cleaned) {
+			return nil
+		}
+		// Resolve alias target
+		absTarget := filepath.Join(filepath.Dir(path), cleaned)
+		relTarget, err := filepath.Rel(pathsDir, absTarget)
+		if err != nil {
+			return nil
+		}
+		aliasTarget := "/" + filepath.ToSlash(relTarget)
+
+		// Only include if target is a valid blob entry
+		if _, err := s.Get(aliasTarget); err != nil {
+			return nil
+		}
+
+		rel, _ := filepath.Rel(pathsDir, path)
+		result["/"+filepath.ToSlash(rel)] = aliasTarget
+		return nil
+	})
+	if os.IsNotExist(err) {
+		return result, nil
+	}
+	return result, err
+}
+
+func (s *symlinkBlobStore) DataDir() string { return s.dataDir }
+
+func (s *symlinkBlobStore) timeFilePath(remotePath string) string {
+	return s.storePath(remotePath) + ".time"
+}
+
+func (s *symlinkBlobStore) readTimeFile(remotePath string) int64 {
+	data, err := os.ReadFile(s.timeFilePath(remotePath))
+	if err != nil {
+		// Fallback: use symlink mtime
+		sp := s.storePath(remotePath)
+		fi, err := os.Lstat(sp)
+		if err != nil {
+			return 0
+		}
+		return fi.ModTime().UnixMilli()
+	}
+	t, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return t
+}
+
+func (s *symlinkBlobStore) writeTimeFile(remotePath string, t int64) error {
+	path := s.timeFilePath(remotePath)
+	return os.WriteFile(path, []byte(fmt.Sprintf("%d\n", t)), 0o644)
 }
 
 // NewRootCommand returns the root cobra.Command for the w9y CLI.

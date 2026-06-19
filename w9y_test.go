@@ -197,18 +197,20 @@ func TestRootListsEntriesSortedByTime(t *testing.T) {
 	if err := os.MkdirAll(blobDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(blobDir, "a.wasm.gz"), bytes.Repeat([]byte("x"), 1024*1024), 0o644); err != nil {
+	shaA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	shaB := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if err := os.WriteFile(filepath.Join(blobDir, shaA+".wasm.gz"), bytes.Repeat([]byte("x"), 1024*1024), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(blobDir, "b.wasm.gz"), bytes.Repeat([]byte("y"), 1024*1024*2), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(blobDir, shaB+".wasm.gz"), bytes.Repeat([]byte("y"), 1024*1024*2), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	store := NewBlobStore(dir)
-	if err := store.SetWithTime("/a.wasm", "a", 100); err != nil {
+	if err := store.SetWithTime("/a.wasm", shaA, 100); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetWithTime("/b.wasm", "b", 200); err != nil {
+	if err := store.SetWithTime("/b.wasm", shaB, 200); err != nil {
 		t.Fatal(err)
 	}
 
@@ -712,7 +714,7 @@ func TestAliasPersistence(t *testing.T) {
 	store := NewBlobStore(dir)
 
 	// Set an entry
-	if err := store.Set("/go/foo@v0.0.1", "abc123"); err != nil {
+	if err := store.Set("/go/foo@v0.0.1", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); err != nil {
 		t.Fatal(err)
 	}
 

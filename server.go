@@ -222,6 +222,18 @@ func handleUpload(w http.ResponseWriter, r *http.Request, store BlobStore, dataD
 		return
 	}
 
+	// Alias creation — no blob upload needed
+	if aliasTarget := r.URL.Query().Get("alias"); aliasTarget != "" {
+		if err := store.SetAlias(remotePath, aliasTarget); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprintf(w, "alias %s -> %s", remotePath, aliasTarget)
+		return
+	}
+
 	claimed := r.URL.Query().Get("hash")
 
 	// Fast path: hash provided and blob already exists — verify and link
