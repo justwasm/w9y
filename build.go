@@ -145,7 +145,7 @@ func buildGoModule(ctx context.Context, modDir string, subPkg string, tmpDir str
 	slog.Info("go mod edit -replace", "dir", modDir)
 	replaceCmd := exec.CommandContext(replaceCtx, "go", "mod", "edit",
 		"-replace", "github.com/atotto/clipboard=github.com/justwasm/clipboard@v0.1.6",
-		"-replace", "charm.land/bubbletea/v2=github.com/bubbletui/bubbletea/v2@v2.0.8")
+		"-replace", "charm.land/bubbletea/v2=github.com/bubbletui/bubbletea/v2@v2.0.10")
 	replaceCmd.Dir = modDir
 	replaceCmd.Env = append(os.Environ(), "GOWORK=off")
 	replaceCmd.Stderr = new(bytes.Buffer)
