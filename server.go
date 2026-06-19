@@ -97,6 +97,10 @@ func NewServer(dataDir string) http.Handler {
 				handleDelete(w, store, remotePath)
 				return
 			}
+			if r.Method == http.MethodPut || r.Method == http.MethodPost {
+				handleUpload(w, r, store, dataDir, remotePath)
+				return
+			}
 			handleGoWasm(w, r, builder, remotePath)
 			return
 		}
@@ -109,6 +113,10 @@ func NewServer(dataDir string) http.Handler {
 					return
 				}
 				handleDelete(w, store, remotePath)
+				return
+			}
+			if r.Method == http.MethodPut || r.Method == http.MethodPost {
+				handleUpload(w, r, store, dataDir, remotePath)
 				return
 			}
 			handleTinyGoWasm(w, r, builder, remotePath)
