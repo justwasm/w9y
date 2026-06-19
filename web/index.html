@@ -89,6 +89,11 @@ footer{margin-top:32px;padding:16px 0;border-top:1px solid #ddd;color:#888;font-
   var sortAsc = false;
   var searchQ = '';
   var filterRuntime = 'all';
+  var params = new URLSearchParams(location.search);
+  if (params.has('q')) searchQ = params.get('q');
+  if (params.has('filter')) filterRuntime = params.get('filter');
+  document.getElementById('search').value = searchQ;
+  document.getElementById('filter').value = filterRuntime;
   var user = null;
 
   function badge(e) {
@@ -248,11 +253,19 @@ footer{margin-top:32px;padding:16px 0;border-top:1px solid #ddd;color:#888;font-
 
   document.getElementById('search').addEventListener('input', function(e) {
     searchQ = e.target.value;
+    var url = new URL(location.href);
+    if (searchQ) url.searchParams.set('q', searchQ);
+    else url.searchParams.delete('q');
+    history.replaceState(null, '', url.pathname + url.search);
     renderTable();
   });
 
   document.getElementById('filter').addEventListener('change', function(e) {
     filterRuntime = e.target.value;
+    var url = new URL(location.href);
+    if (filterRuntime !== 'all') url.searchParams.set('filter', filterRuntime);
+    else url.searchParams.delete('filter');
+    history.replaceState(null, '', url.pathname + url.search);
     renderTable();
   });
 
