@@ -99,7 +99,7 @@ All subcommands use Go's `flag` package with `flag.ContinueOnError`. Flag parsin
 | `restore` | `-data-dir` | Uploads entries + blobs to remote |
 | `gc` | `-data-dir`, `-clean` | Dry-run by default; `-clean` deletes orphans |
 | `check` | `-data-dir` | Validates SHA256 + WASM magic bytes for all blobs |
-| `mod apply` | `--prefix`, `--dry-run`, `-v`, `-f` | Build/download manifest entries. Arg is `mod@ver` (remote) or just `mod` (latest semver); `-f` for local file. |
+| `mod apply` | `--prefix`, `--dry-run`, `-v`, `-f` | Build/download manifest entries. Args are `mod@ver` (remote) or `mod` (latest semver); `-f` for local file (repeatable). Multiple manifests supported. |
 | `mod parse` | `<file>` | Parse and display manifest |
 | `mod fmt` | `<file>`, `-w` | Format manifest file |
 | `mod upload` | `<file>` | Upload manifest to server |

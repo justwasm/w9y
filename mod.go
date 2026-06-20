@@ -107,47 +107,64 @@ func newModApplyCommand() *cobra.Command {
 	var prefix string
 	var dryRun bool
 	var verbose bool
-	var file string
+	var files []string
 
 	cmd := &cobra.Command{
-		Use:   "apply [mod@ver]",
+		Use:   "apply [mod@ver ...]",
 		Short: "Build and download manifest entries to --prefix",
 		Long: `Build and download all entries in a manifest file to --prefix directory,
 preserving the output path structure.
 
 The manifest can be specified as:
-  -f <file>        local manifest file
+  -f <file>        local manifest file (repeatable)
   <mod>@<ver>      remote manifest on the server
   <mod>            remote manifest, latest version (semver)
 
+Multiple manifests can be given — all entries are downloaded to --prefix.
 If no version is given, the latest semver is resolved automatically.
 Each entry is built via the remote /go/ endpoint (W9Y env var).
 `,
-		Args: cobra.MaximumNArgs(1),
+		Args: cobra.ArbitraryArgs,
 		RunE: func(c *cobra.Command, args []string) error {
-			// Resolve manifest source
-			var data []byte
-			var manifestLabel string
+			if len(files) == 0 && len(args) == 0 {
+				return fmt.Errorf("specify a manifest with -f <file> or <mod>@<ver>")
+			}
+			if prefix == "" {
+				return fmt.Errorf("prefix required: set --prefix or $WANIX")
+			}
 
-			if file != "" {
-				var err error
-				data, err = os.ReadFile(file)
+			host := strings.TrimRight(defaultHost, "/")
+			client := &http.Client{Timeout: 5 * time.Minute}
+
+			// Collect all manifests
+			type manifestSource struct {
+				data  []byte
+				label string
+				ver   string // resolved version for remote manifests
+			}
+			var sources []manifestSource
+
+			// Local files
+			for _, f := range files {
+				data, err := os.ReadFile(f)
 				if err != nil {
 					return err
 				}
-				manifestLabel = file
-			} else if len(args) > 0 {
-				name, version, hasVersion := strings.Cut(args[0], "@")
+				sources = append(sources, manifestSource{data: data, label: f})
+			}
+
+			// Remote manifests
+			for _, arg := range args {
+				name, version, hasVersion := strings.Cut(arg, "@")
 				if name == "" {
-					return fmt.Errorf("empty module name")
+					return fmt.Errorf("empty module name in %q", arg)
 				}
 
-				host := strings.TrimRight(defaultHost, "/")
-				client := &http.Client{Timeout: 30 * time.Second}
+				fetchClient := &http.Client{Timeout: 30 * time.Second}
 
 				if !hasVersion || version == "" {
 					var err error
-					version, err = resolveLatestManifestVersion(client, host, name)
+					version, err = resolveLatestManifestVersion(fetchClient, host, name)
 					if err != nil {
 						return fmt.Errorf("resolve latest version for %s: %w", name, err)
 					}
@@ -158,106 +175,96 @@ Each entry is built via the remote /go/ endpoint (W9Y env var).
 				if err != nil {
 					return err
 				}
-				resp, err := client.Get(u)
+				resp, err := fetchClient.Get(u)
 				if err != nil {
 					return err
 				}
-				defer resp.Body.Close()
 				if resp.StatusCode != http.StatusOK {
+					resp.Body.Close()
 					return fmt.Errorf("fetch manifest %s@%s: %s", name, version, resp.Status)
 				}
-				data, err = io.ReadAll(resp.Body)
+				data, err := io.ReadAll(resp.Body)
+				resp.Body.Close()
 				if err != nil {
 					return err
 				}
-				manifestLabel = name + "@" + version
-			} else {
-				return fmt.Errorf("specify a manifest with -f <file> or <mod>@<ver>")
+				sources = append(sources, manifestSource{data: data, label: name + "@" + version, ver: version})
 			}
 
-			m, err := ParseManifest(data)
-			if err != nil {
-				return err
-			}
-
-			// Override manifest version with resolved remote version when
-			// using the remote form (the manifest on the server has no
-			// version field — the version is in the URL).
-			if len(args) > 0 && m.Version == "" {
-				_, version, _ := strings.Cut(args[0], "@")
-				if version == "" {
-					// Resolved above, find it from manifestLabel
-					_, v, _ := strings.Cut(manifestLabel, "@")
-					m.Version = v
-				}
-			}
-
-			if verbose {
-				fmt.Fprintf(os.Stderr, "manifest: %s (%d entries)\n", manifestLabel, len(m.Entries))
-			}
-
-			host := strings.TrimRight(defaultHost, "/")
-			client := &http.Client{
-				Timeout: 5 * time.Minute,
-			}
-
-			var errs []error
-			for _, entry := range m.Entries {
-				entryVer := entry.Version
-				if entryVer == "" {
-					entryVer = m.Version
-				}
-				if entryVer == "" {
-					entryVer = "latest"
-				}
-
-				u, err := url.JoinPath(host, "/go", entry.Source+"@"+entryVer)
+			// Process each manifest
+			var allErrors []error
+			for _, src := range sources {
+				m, err := ParseManifest(src.data)
 				if err != nil {
-					errs = append(errs, fmt.Errorf("%s: build URL: %w", entry.Output, err))
-					if verbose {
-						fmt.Printf("%s (error: %v)\n", entry.Output, err)
-					}
+					allErrors = append(allErrors, fmt.Errorf("%s: parse: %w", src.label, err))
 					continue
 				}
 
-				dest := filepath.Join(prefix, filepath.FromSlash(entry.Output))
-				if dryRun {
-					fmt.Printf("%s -> %s\n", u, dest)
-					continue
+				// Set manifest version from remote ref if not embedded
+				if src.ver != "" && m.Version == "" {
+					m.Version = src.ver
 				}
 
-				ok, err := downloadBlob(client, u, dest)
-				if err != nil {
-					errs = append(errs, fmt.Errorf("%s: %w", entry.Output, err))
-					if verbose {
-						fmt.Printf("%s (error: %v)\n", entry.Output, err)
-					}
-					continue
-				}
 				if verbose {
-					if ok {
-						fmt.Println(entry.Output)
-					} else {
-						fmt.Printf("%s (cached)\n", entry.Output)
+					fmt.Fprintf(os.Stderr, "manifest: %s (%d entries)\n", src.label, len(m.Entries))
+				}
+
+				for _, entry := range m.Entries {
+					entryVer := entry.Version
+					if entryVer == "" {
+						entryVer = m.Version
+					}
+					if entryVer == "" {
+						entryVer = "latest"
+					}
+
+					u, err := url.JoinPath(host, "/go", entry.Source+"@"+entryVer)
+					if err != nil {
+						allErrors = append(allErrors, fmt.Errorf("%s: build URL: %w", entry.Output, err))
+						if verbose {
+							fmt.Printf("%s (error: %v)\n", entry.Output, err)
+						}
+						continue
+					}
+
+					dest := filepath.Join(prefix, filepath.FromSlash(entry.Output))
+					if dryRun {
+						fmt.Printf("%s -> %s\n", u, dest)
+						continue
+					}
+
+					ok, err := downloadBlob(client, u, dest)
+					if err != nil {
+						allErrors = append(allErrors, fmt.Errorf("%s: %w", entry.Output, err))
+						if verbose {
+							fmt.Printf("%s (error: %v)\n", entry.Output, err)
+						}
+						continue
+					}
+					if verbose {
+						if ok {
+							fmt.Println(entry.Output)
+						} else {
+							fmt.Printf("%s (cached)\n", entry.Output)
+						}
 					}
 				}
 			}
 
-			if len(errs) > 0 {
-				for _, err := range errs {
+			if len(allErrors) > 0 {
+				for _, err := range allErrors {
 					fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				}
-				return fmt.Errorf("%d entries failed", len(errs))
+				return fmt.Errorf("%d entries failed", len(allErrors))
 			}
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&prefix, "prefix", "", "output directory (required)")
-	cmd.MarkFlagRequired("prefix")
+	cmd.Flags().StringVar(&prefix, "prefix", cmp.Or(os.Getenv("WANIX"), ""), "output directory (defaults to $WANIX)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show what would be downloaded")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "show per-entry progress (cached/downloaded)")
-	cmd.Flags().StringVarP(&file, "file", "f", "", "local manifest file")
+	cmd.Flags().StringArrayVarP(&files, "file", "f", nil, "local manifest file (repeatable)")
 	return cmd
 }
 
