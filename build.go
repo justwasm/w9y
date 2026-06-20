@@ -112,6 +112,22 @@ func resolveSpec(ctx context.Context, importPath, version string) (resolvedSpec,
 	return resolvedSpec{}, fmt.Errorf("could not resolve %s@%s", importPath, version)
 }
 
+// isModuleName returns true if the first line of go.mod in modDir is
+// "module <name>", ignoring leading/trailing whitespace.
+func isModuleName(modDir, name string) bool {
+	data, err := os.ReadFile(filepath.Join(modDir, "go.mod"))
+	if err != nil {
+		return false
+	}
+	for line := range strings.SplitSeq(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if mod, ok := strings.CutPrefix(line, "module "); ok {
+			return strings.TrimSpace(mod) == name
+		}
+	}
+	return false
+}
+
 func buildGoModule(ctx context.Context, modDir string, subPkg string, tmpDir string, useTinyGo bool) (string, error) {
 	// Initialize go.mod if missing (e.g. for gists without one)
 	if _, err := os.Stat(filepath.Join(modDir, "go.mod")); os.IsNotExist(err) {
@@ -135,6 +151,24 @@ func buildGoModule(ctx context.Context, modDir string, subPkg string, tmpDir str
 		verCmd.Env = append(os.Environ(), "GOWORK=off")
 		if err := verCmd.Run(); err != nil {
 			return "", fmt.Errorf("go mod edit -go=1.26: %w", err)
+		}
+	}
+
+	// Detect if the module name is "cmd" (Go standard library tools like cmd/go).
+	// Rename to avoid conflicts with GOROOT's cmd module.
+	if isModuleName(modDir, "cmd") {
+		newModule := "example.com/new/module"
+		slog.Info("go mod edit -module", "dir", modDir, "module", newModule)
+		modEditCmd := exec.CommandContext(ctx, "go", "mod", "edit", "-module", newModule)
+		modEditCmd.Dir = modDir
+		modEditCmd.Env = append(os.Environ(), "GOWORK=off")
+		modEditCmd.Stderr = new(bytes.Buffer)
+		if err := modEditCmd.Run(); err != nil {
+			stderr := modEditCmd.Stderr.(*bytes.Buffer).String()
+			if stderr != "" {
+				fmt.Fprint(os.Stderr, stderr)
+			}
+			return "", fmt.Errorf("go mod edit -module: %w", err)
 		}
 	}
 
