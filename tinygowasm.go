@@ -39,6 +39,17 @@ func handleTinyGoWasm(w http.ResponseWriter, r *http.Request, builder *GoWasmBui
 		return
 	}
 
+	// HEAD — only check cache, never trigger a build
+	if r.Method == "HEAD" {
+		if e, err := builder.Get(remotePath); err == nil {
+			w.Header().Set("ETag", `"`+e.Hash+`"`)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+		return
+	}
+
 	sha, err := builder.TinyBuildOrWait(gwp.ImportPath, gwp.Version, remotePath, r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)

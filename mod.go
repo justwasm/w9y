@@ -145,6 +145,9 @@ The manifest is used locally — no upload needed.
 				u, err := url.JoinPath(host, "/go", entry.Source+"@"+entryVer)
 				if err != nil {
 					errs = append(errs, fmt.Errorf("%s: build URL: %w", entry.Output, err))
+					if verbose {
+						fmt.Printf("%s (error: %v)\n", entry.Output, err)
+					}
 					continue
 				}
 
@@ -157,6 +160,9 @@ The manifest is used locally — no upload needed.
 				ok, err := downloadBlob(client, u, dest)
 				if err != nil {
 					errs = append(errs, fmt.Errorf("%s: %w", entry.Output, err))
+					if verbose {
+						fmt.Printf("%s (error: %v)\n", entry.Output, err)
+					}
 					continue
 				}
 				if verbose {
@@ -186,32 +192,44 @@ The manifest is used locally — no upload needed.
 }
 
 func downloadBlob(client *http.Client, url, dest string) (downloaded bool, err error) {
-	// Check if local file exists and compute its SHA-256
+	// If local file exists, check via HEAD whether it's still current.
+	// The local file is raw wasm bytes (Go's HTTP transport auto-decompresses
+	// Content-Encoding: gzip). The server's ETag is the raw wasm SHA.
 	var localSHA string
 	if _, err := os.Stat(dest); err == nil {
 		data, err := os.ReadFile(dest)
 		if err == nil {
 			localSHA = sha256Hex(data)
 		}
+
+		// HEAD request to get server's ETag — only when we already have
+		// a local copy to compare against.
+		headReq, err := http.NewRequest(http.MethodHead, url, nil)
+		if err != nil {
+			return false, fmt.Errorf("create HEAD request: %w", err)
+		}
+		headResp, err := client.Do(headReq)
+		if err != nil {
+			return false, fmt.Errorf("HEAD: %w", err)
+		}
+		headResp.Body.Close()
+
+		serverSHA := strings.Trim(headResp.Header.Get("Etag"), `"`)
+		if serverSHA != "" && localSHA == serverSHA {
+			return false, nil // up to date
+		}
 	}
 
+	// Download
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return false, fmt.Errorf("create request: %w", err)
 	}
-	if localSHA != "" {
-		req.Header.Set("If-None-Match", `"`+localSHA+`"`)
-	}
-
 	resp, err := client.Do(req)
 	if err != nil {
 		return false, fmt.Errorf("GET: %w", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotModified {
-		return false, nil // already up to date, not downloaded
-	}
 
 	if resp.StatusCode != http.StatusOK {
 		return false, fmt.Errorf("status %s", resp.Status)

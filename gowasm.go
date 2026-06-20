@@ -69,6 +69,17 @@ func handleGoWasm(w http.ResponseWriter, r *http.Request, builder *GoWasmBuilder
 		return
 	}
 
+	// HEAD — only check cache, never trigger a build
+	if r.Method == "HEAD" {
+		if e, err := builder.Get(remotePath); err == nil {
+			w.Header().Set("ETag", `"`+e.Hash+`"`)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+		return
+	}
+
 	// Gist paths can't be resolved as Go modules — build directly
 	if isGistPath(gwp.ImportPath) {
 		sha, err := builder.BuildOrWait(gwp.ImportPath, gwp.Version, remotePath, r.Context())
