@@ -1,6 +1,6 @@
 module go
 
-version v0.0.0-20260620152215-e6fcfe3ae2be
+version v0.0.0-20260620184548-288a884a524f
 
 go/bin/go                       github.com/justwasm/go/src/cmd/go
 go/bin/gofmt                    github.com/justwasm/go/src/cmd/gofmt
