@@ -538,11 +538,35 @@ func handleManifestEntry(w http.ResponseWriter, r *http.Request, mstore *Manifes
 		return
 	}
 
-	// Parse /manifest/<name>@<version>[/<output>]
 	trimmed := strings.TrimPrefix(remotePath, "/manifest/")
 
-	// Directory listing: /manifest/<name>@<ver>[/]
-	if trimmed == "" || trimmed[len(trimmed)-1] == '/' {
+	// /manifest/ — root listing of all manifests
+	if trimmed == "" {
+		manifests, err := mstore.List()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, "<!DOCTYPE html><html><head><meta charset=utf-8><title>manifests</title></head><body>\n")
+		fmt.Fprintf(w, "<h1>manifests</h1>\n<ul>\n")
+		// Sort names for stable output
+		names := make([]string, 0, len(manifests))
+		for n := range manifests {
+			names = append(names, n)
+		}
+		slices.Sort(names)
+		for _, name := range names {
+			for _, ver := range manifests[name] {
+				fmt.Fprintf(w, "<li><a href=\"/manifest/%s@%s/\">%s@%s</a></li>\n", name, ver, name, ver)
+			}
+		}
+		fmt.Fprintf(w, "</ul>\n</body></html>\n")
+		return
+	}
+
+	// /manifest/<name>@<ver>/ — entry listing
+	if trimmed[len(trimmed)-1] == '/' {
 		name, version, ok := parseManifestRef(strings.TrimRight(trimmed, "/"))
 		if !ok {
 			http.NotFound(w, r)
@@ -563,26 +587,18 @@ func handleManifestEntry(w http.ResponseWriter, r *http.Request, mstore *Manifes
 			return
 		}
 
-		type entryItem struct {
-			Output   string `json:"output"`
-			Source   string `json:"source"`
-			Version  string `json:"version,omitempty"`
-			Redirect string `json:"redirect"`
-		}
-		items := make([]entryItem, 0, len(m.Entries))
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, "<!DOCTYPE html><html><head><meta charset=utf-8><title>%s@%s</title></head><body>\n", name, version)
+		fmt.Fprintf(w, "<h1><a href=\"/manifest/\">manifests</a> / %s@%s</h1>\n<ul>\n", name, version)
 		for _, e := range m.Entries {
 			ver := e.Version
 			if ver == "" {
 				ver = version
 			}
-			items = append(items, entryItem{
-				Output:   e.Output,
-				Source:   e.Source,
-				Version:  ver,
-				Redirect: "/go/" + e.Source + "@" + ver,
-			})
+			fmt.Fprintf(w, "<li><a href=\"/manifest/%s@%s/%s\">%s</a> → <a href=\"/go/%s@%s\">%s@%s</a></li>\n",
+				name, version, e.Output, e.Output, e.Source, ver, e.Source, ver)
 		}
-		writeJSON(w, items)
+		fmt.Fprintf(w, "</ul>\n</body></html>\n")
 		return
 	}
 
