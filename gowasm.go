@@ -260,8 +260,12 @@ func (b *GoWasmBuilder) BuildOrWait(importPath, version, remotePath string, reqC
 		b.builds[remotePath] = append(waiters, ch)
 		b.mu.Unlock()
 
-		res := <-ch
-		return res.sha, res.err
+		select {
+		case res := <-ch:
+			return res.sha, res.err
+		case <-reqCtx.Done():
+			return "", reqCtx.Err()
+		}
 	}
 
 	// We are the builder

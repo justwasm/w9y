@@ -72,8 +72,13 @@ func (b *GoWasmBuilder) TinyBuildOrWait(importPath, version, remotePath string, 
 	if waiters, exists := b.builds[remotePath]; exists {
 		b.builds[remotePath] = append(waiters, ch)
 		b.mu.Unlock()
-		res := <-ch
-		return res.sha, res.err
+
+		select {
+		case res := <-ch:
+			return res.sha, res.err
+		case <-reqCtx.Done():
+			return "", reqCtx.Err()
+		}
 	}
 
 	b.builds[remotePath] = []chan buildResult{ch}
