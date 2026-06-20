@@ -25,6 +25,7 @@ func NewServer(dataDir string) http.Handler {
 	store := NewBlobStore(dataDir)
 	builder := NewGoWasmBuilder(store)
 	jobs := NewJobStore()
+	mstore := NewManifestStore(dataDir)
 	return withCORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -64,6 +65,12 @@ func NewServer(dataDir string) http.Handler {
 			default:
 				http.NotFound(w, r)
 			}
+			return
+		}
+
+		// Manifest API routes
+		if strings.HasPrefix(remotePath, "/api/manifest") {
+			handleManifestAPI(w, r, mstore, remotePath)
 			return
 		}
 
@@ -132,6 +139,12 @@ func NewServer(dataDir string) http.Handler {
 		// go-get=1 discovery for gist paths
 		if r.URL.Query().Has("go-get") {
 			handleGoGet(w, r, remotePath)
+			return
+		}
+
+		// Manifest entry paths: /manifest/<name>@<ver>/<output>
+		if strings.HasPrefix(remotePath, "/manifest/") {
+			handleManifestEntry(w, r, mstore, builder, remotePath)
 			return
 		}
 
@@ -452,6 +465,194 @@ func serveWasmExecJS(w http.ResponseWriter, r *http.Request, runtime string) {
 
 	w.Header().Set("Content-Type", "application/javascript")
 	http.ServeContent(w, r, "wasm_exec.js", stat.ModTime(), f)
+}
+
+func handleManifestAPI(w http.ResponseWriter, r *http.Request, mstore *ManifestStore, remotePath string) {
+	trimmed := strings.TrimPrefix(remotePath, "/api/manifest")
+	trimmed = strings.TrimPrefix(trimmed, "/")
+
+	if trimmed == "" {
+		// GET /api/manifest — list all
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		manifests, err := mstore.List()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, manifests)
+		return
+	}
+
+	parts := strings.SplitN(trimmed, "/", 2)
+	if len(parts) < 2 {
+		http.NotFound(w, r)
+		return
+	}
+	name, version := parts[0], parts[1]
+
+	switch r.Method {
+	case http.MethodGet:
+		data, err := mstore.Get(name, version)
+		if err != nil {
+			if os.IsNotExist(err) {
+				http.NotFound(w, r)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write(data)
+
+	case http.MethodPut:
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		// Validate by parsing
+		if _, err := ParseManifest(body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := mstore.Set(name, version, body); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, "stored manifest %s@%s", name, version)
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleManifestEntry serves a WASM blob from a manifest entry.
+// URL: /manifest/<name>@<version>/<output>
+func handleManifestEntry(w http.ResponseWriter, r *http.Request, mstore *ManifestStore, builder *GoWasmBuilder, remotePath string) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse /manifest/<name>@<version>[/<output>]
+	trimmed := strings.TrimPrefix(remotePath, "/manifest/")
+
+	// Directory listing: /manifest/<name>@<ver>[/]
+	if trimmed == "" || trimmed[len(trimmed)-1] == '/' {
+		name, version, ok := parseManifestRef(strings.TrimRight(trimmed, "/"))
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		data, err := mstore.Get(name, version)
+		if err != nil {
+			if os.IsNotExist(err) {
+				http.NotFound(w, r)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		m, err := ParseManifest(data)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		type entryItem struct {
+			Output   string `json:"output"`
+			Source   string `json:"source"`
+			Version  string `json:"version,omitempty"`
+			Redirect string `json:"redirect"`
+		}
+		items := make([]entryItem, 0, len(m.Entries))
+		for _, e := range m.Entries {
+			ver := e.Version
+			if ver == "" {
+				ver = version
+			}
+			items = append(items, entryItem{
+				Output:   e.Output,
+				Source:   e.Source,
+				Version:  ver,
+				Redirect: "/go/" + e.Source + "@" + ver,
+			})
+		}
+		writeJSON(w, items)
+		return
+	}
+
+	// Entry redirect: /manifest/<name>@<ver>/<output>
+	parts := strings.SplitN(trimmed, "/", 2)
+	if len(parts) < 2 {
+		http.NotFound(w, r)
+		return
+	}
+
+	firstPart := parts[0]
+	outputPath := parts[1]
+
+	importPath, version, ok := strings.Cut(firstPart, "@")
+	if !ok || importPath == "" || version == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Look up the manifest
+	data, err := mstore.Get(importPath, version)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	m, err := ParseManifest(data)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Find the matching entry
+	var entry *ManifestEntry
+	for i := range m.Entries {
+		if m.Entries[i].Output == outputPath {
+			entry = &m.Entries[i]
+			break
+		}
+	}
+	if entry == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Redirect to the /go/ build endpoint
+	entryVer := entry.Version
+	if entryVer == "" {
+		entryVer = version
+	}
+	redirectTo := "/go/" + entry.Source + "@" + entryVer
+	http.Redirect(w, r, redirectTo, http.StatusFound)
+}
+
+// parseManifestRef parses "name@version" into (name, version, ok).
+func parseManifestRef(ref string) (string, string, bool) {
+	name, ver, ok := strings.Cut(ref, "@")
+	if !ok || name == "" || ver == "" {
+		return "", "", false
+	}
+	return name, ver, true
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(v)
 }
 
 var versionCache sync.Map // runtime → string

@@ -45,6 +45,7 @@ func handleTinyGoWasm(w http.ResponseWriter, r *http.Request, builder *GoWasmBui
 		return
 	}
 	gzPath := blobPath(builder.DataDir(), sha, true)
+	w.Header().Set("ETag", `"`+sha+`"`)
 	serveFile(w, r, gzPath, true)
 }
 

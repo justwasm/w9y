@@ -77,6 +77,7 @@ func handleGoWasm(w http.ResponseWriter, r *http.Request, builder *GoWasmBuilder
 			return
 		}
 		gzPath := blobPath(builder.DataDir(), sha, true)
+		w.Header().Set("ETag", `"`+sha+`"`)
 		serveFile(w, r, gzPath, true)
 		return
 	}
@@ -103,6 +104,7 @@ func handleGoWasm(w http.ResponseWriter, r *http.Request, builder *GoWasmBuilder
 		return
 	}
 	gzPath := blobPath(builder.DataDir(), sha, true)
+	w.Header().Set("ETag", `"`+sha+`"`)
 	serveFile(w, r, gzPath, true)
 }
 

@@ -751,3 +751,220 @@ func TestAliasPersistence(t *testing.T) {
 		t.Fatalf("ListAliases = %v, want map[/go/foo@latest:/go/foo@v0.0.1]", aliases)
 	}
 }
+
+func TestParseManifestFull(t *testing.T) {
+	data := []byte(`module go
+go 1.26
+version v1.22.0
+
+bin/go    cmd/go
+bin/vet   golang.org/x/tools/cmd/vet
+
+// External tool with per-entry version
+bin/esbuild   github.com/evanw/esbuild/cmd/esbuild@v0.25.0
+`)
+	m, err := ParseManifest(data)
+	if err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+	if m.Module != "go" {
+		t.Fatalf("Module = %q, want %q", m.Module, "go")
+	}
+	if m.GoVersion != "1.26" {
+		t.Fatalf("GoVersion = %q, want %q", m.GoVersion, "1.26")
+	}
+	if m.Version != "v1.22.0" {
+		t.Fatalf("Version = %q, want %q", m.Version, "v1.22.0")
+	}
+	if len(m.Entries) != 3 {
+		t.Fatalf("len(Entries) = %d, want 3", len(m.Entries))
+	}
+
+	want := []struct{ output, source, version string }{
+		{"bin/go", "cmd/go", "v1.22.0"},
+		{"bin/vet", "golang.org/x/tools/cmd/vet", "v1.22.0"},
+		{"bin/esbuild", "github.com/evanw/esbuild/cmd/esbuild", "v0.25.0"},
+	}
+	for i, w := range want {
+		e := m.Entries[i]
+		if e.Output != w.output {
+			t.Errorf("Entries[%d].Output = %q, want %q", i, e.Output, w.output)
+		}
+		if e.Source != w.source {
+			t.Errorf("Entries[%d].Source = %q, want %q", i, e.Source, w.source)
+		}
+		if e.Version != w.version {
+			t.Errorf("Entries[%d].Version = %q, want %q", i, e.Version, w.version)
+		}
+	}
+}
+
+func TestParseManifestMinimal(t *testing.T) {
+	data := []byte(`module go
+
+bin/go  cmd/go
+`)
+	m, err := ParseManifest(data)
+	if err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+	if m.Module != "go" {
+		t.Fatalf("Module = %q, want %q", m.Module, "go")
+	}
+	if m.GoVersion != "" {
+		t.Fatalf("GoVersion = %q, want empty", m.GoVersion)
+	}
+	if m.Version != "" {
+		t.Fatalf("Version = %q, want empty", m.Version)
+	}
+	if len(m.Entries) != 1 {
+		t.Fatalf("len(Entries) = %d, want 1", len(m.Entries))
+	}
+	if m.Entries[0].Version != "" {
+		t.Fatalf("entry Version = %q, want empty (will use @latest)", m.Entries[0].Version)
+	}
+}
+
+func TestParseManifestRequiresModule(t *testing.T) {
+	_, err := ParseManifest([]byte("go 1.26\nversion v1.0.0\n"))
+	if err == nil {
+		t.Fatal("expected error for missing module directive")
+	}
+}
+
+func TestParseManifestRejectsEmptyImport(t *testing.T) {
+	_, err := ParseManifest([]byte("module m\n\nbin/go\n"))
+	if err == nil {
+		t.Fatal("expected error for entry without source")
+	}
+}
+
+func TestManifestAPIRoutes(t *testing.T) {
+	dir := t.TempDir()
+	server := NewServer(dir)
+
+	// Upload a manifest
+	data := []byte(`module go
+version v1.22.0
+
+bin/go  cmd/go
+`)
+	req := httptest.NewRequest(http.MethodPut, "/api/manifest/go/v1.22.0", bytes.NewReader(data))
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("upload manifest status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	// Get the manifest back
+	req = httptest.NewRequest(http.MethodGet, "/api/manifest/go/v1.22.0", nil)
+	rec = httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get manifest status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	m, err := ParseManifest(rec.Body.Bytes())
+	if err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+	if m.Module != "go" || len(m.Entries) != 1 {
+		t.Fatalf("manifest = %+v", m)
+	}
+
+	// List manifests
+	req = httptest.NewRequest(http.MethodGet, "/api/manifest", nil)
+	rec = httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list manifests status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var result map[string][]string
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(result) != 1 || result["go"][0] != "v1.22.0" {
+		t.Fatalf("result = %v, want {go: [v1.22.0]}", result)
+	}
+
+	// Manifest entry redirect
+	req = httptest.NewRequest(http.MethodGet, "/manifest/go@v1.22.0/bin/go", nil)
+	rec = httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("entry redirect status = %d, want %d", rec.Code, http.StatusFound)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/go/cmd/go@v1.22.0" {
+		t.Fatalf("Location = %q, want /go/cmd/go@v1.22.0", loc)
+	}
+}
+
+func TestManifestEntryRedirectUsesPerEntryVersion(t *testing.T) {
+	dir := t.TempDir()
+	server := NewServer(dir)
+
+	data := []byte(`module tools
+version v1.0.0
+
+bin/esbuild   github.com/evanw/esbuild/cmd/esbuild@v0.25.0
+`)
+	req := httptest.NewRequest(http.MethodPut, "/api/manifest/tools/v1.0.0", bytes.NewReader(data))
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("upload manifest status = %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/manifest/tools@v1.0.0/bin/esbuild", nil)
+	rec = httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("entry redirect status = %d, want %d", rec.Code, http.StatusFound)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/go/github.com/evanw/esbuild/cmd/esbuild@v0.25.0" {
+		t.Fatalf("Location = %q, want /go/github.com/evanw/esbuild/cmd/esbuild@v0.25.0", loc)
+	}
+}
+
+func TestFormatManifest(t *testing.T) {
+	m := &Manifest{
+		Module:  "bbtex",
+		Version: "v2.0.10",
+		Entries: []ManifestEntry{
+			{Output: "examples/z", Source: "pkg/z"},
+			{Output: "examples/a", Source: "pkg/a", Version: "v2.0.10"},
+			{Output: "examples/m", Source: "pkg/m", Version: "v0.5.0"},
+		},
+	}
+
+	got := string(formatManifest(m))
+
+	// Should be sorted by output path
+	if !strings.Contains(got, "examples/a  pkg/a") {
+		t.Fatal("expected examples/a first")
+	}
+	if !strings.Contains(got, "examples/m  pkg/m") {
+		t.Fatal("expected examples/m")
+	}
+	if !strings.Contains(got, "examples/z  pkg/z") {
+		t.Fatal("expected examples/z last")
+	}
+
+	// Per-entry version matching the shared version should be stripped
+	if strings.Contains(got, "pkg/a@v2.0.10") {
+		t.Fatal("should not emit version when it matches manifest version")
+	}
+
+	// Per-entry version differing from shared version should be kept
+	if !strings.Contains(got, "pkg/m@v0.5.0") {
+		t.Fatal("should emit version when it differs from manifest version")
+	}
+
+	// Should be parseable
+	m2, err := ParseManifest([]byte(got))
+	if err != nil {
+		t.Fatalf("ParseManifest(format): %v", err)
+	}
+	if len(m2.Entries) != 3 {
+		t.Fatalf("entries = %d, want 3", len(m2.Entries))
+	}
+}
