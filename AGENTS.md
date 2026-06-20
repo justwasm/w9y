@@ -99,6 +99,11 @@ All subcommands use Go's `flag` package with `flag.ContinueOnError`. Flag parsin
 | `restore` | `-data-dir` | Uploads entries + blobs to remote |
 | `gc` | `-data-dir`, `-clean` | Dry-run by default; `-clean` deletes orphans |
 | `check` | `-data-dir` | Validates SHA256 + WASM magic bytes for all blobs |
+| `mod apply` | `--prefix`, `--dry-run`, `-v`, `-f` | Build/download manifest entries. Arg is `mod@ver` (remote) or just `mod` (latest semver); `-f` for local file. |
+| `mod parse` | `<file>` | Parse and display manifest |
+| `mod fmt` | `<file>`, `-w` | Format manifest file |
+| `mod upload` | `<file>` | Upload manifest to server |
+| `mod list` | | List manifests from server |
 
 Remote host is set via `W9Y` env var (default: `https://w9y.up.railway.app/`).
 
@@ -115,6 +120,18 @@ Remote host is set via `W9Y` env var (default: `https://w9y.up.railway.app/`).
 - `serveGzipFile` peeks at the first 2 bytes to detect gzip magic (`0x1f, 0x8b`). Only sets `Content-Encoding: gzip` when the file is actually gzip-compressed (not all stored blobs are guaranteed gzip — e.g., future non-wasm content).
 - Blob paths (`/blob/<sha>.wasm.gz`) are served **raw** via `serveRawFile` — no `Content-Encoding` header. This is intentional: the client gets the gzip bytes as-is.
 - Download of mapped paths uses `Vary: Accept-Encoding` but **always** serves the pre-gzipped file with `Content-Encoding: gzip` — no on-the-fly compression negotiation.
+
+### `mod apply` Download Caching
+- Uses HEAD + ETag to skip re-download when local file is current.
+- Client computes raw wasm SHA from local file, sends HEAD to `/go/<path>@<ver>`, reads ETag from response.
+- If SHA matches, skips download entirely.
+- Server's HEAD handler only checks blob store cache — never triggers a Go build.
+- First-time builds still happen via GET.
+
+### `mod apply` Remote Manifest Resolution
+- `mod apply <name>` fetches version list from `/api/manifest`, picks latest semver via `semver.Sort`, then GETs the manifest body from `/api/manifest/<name>/<version>`.
+- `mod apply <name>@<ver>` uses the specified version directly.
+- `mod apply -f <file>` reads a local manifest file (no network).
 
 ### Go WASM Build
 - Uses `go install` (not `go build`), because `go install pkg@version` accepts the `@version` syntax but `go build` does not.

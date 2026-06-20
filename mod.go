@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/mod/semver"
 )
 
 func newModCommand() *cobra.Command {
@@ -106,25 +107,93 @@ func newModApplyCommand() *cobra.Command {
 	var prefix string
 	var dryRun bool
 	var verbose bool
+	var file string
 
 	cmd := &cobra.Command{
-		Use:   "apply <file>",
+		Use:   "apply [mod@ver]",
 		Short: "Build and download manifest entries to --prefix",
 		Long: `Build and download all entries in a manifest file to --prefix directory,
 preserving the output path structure.
 
+The manifest can be specified as:
+  -f <file>        local manifest file
+  <mod>@<ver>      remote manifest on the server
+  <mod>            remote manifest, latest version (semver)
+
+If no version is given, the latest semver is resolved automatically.
 Each entry is built via the remote /go/ endpoint (W9Y env var).
-The manifest is used locally — no upload needed.
 `,
-		Args: cobra.ExactArgs(1),
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			data, err := os.ReadFile(args[0])
-			if err != nil {
-				return err
+			// Resolve manifest source
+			var data []byte
+			var manifestLabel string
+
+			if file != "" {
+				var err error
+				data, err = os.ReadFile(file)
+				if err != nil {
+					return err
+				}
+				manifestLabel = file
+			} else if len(args) > 0 {
+				name, version, hasVersion := strings.Cut(args[0], "@")
+				if name == "" {
+					return fmt.Errorf("empty module name")
+				}
+
+				host := strings.TrimRight(defaultHost, "/")
+				client := &http.Client{Timeout: 30 * time.Second}
+
+				if !hasVersion || version == "" {
+					var err error
+					version, err = resolveLatestManifestVersion(client, host, name)
+					if err != nil {
+						return fmt.Errorf("resolve latest version for %s: %w", name, err)
+					}
+					fmt.Fprintf(os.Stderr, "resolved %s@%s\n", name, version)
+				}
+
+				u, err := url.JoinPath(host, "/api/manifest", name, version)
+				if err != nil {
+					return err
+				}
+				resp, err := client.Get(u)
+				if err != nil {
+					return err
+				}
+				defer resp.Body.Close()
+				if resp.StatusCode != http.StatusOK {
+					return fmt.Errorf("fetch manifest %s@%s: %s", name, version, resp.Status)
+				}
+				data, err = io.ReadAll(resp.Body)
+				if err != nil {
+					return err
+				}
+				manifestLabel = name + "@" + version
+			} else {
+				return fmt.Errorf("specify a manifest with -f <file> or <mod>@<ver>")
 			}
+
 			m, err := ParseManifest(data)
 			if err != nil {
 				return err
+			}
+
+			// Override manifest version with resolved remote version when
+			// using the remote form (the manifest on the server has no
+			// version field — the version is in the URL).
+			if len(args) > 0 && m.Version == "" {
+				_, version, _ := strings.Cut(args[0], "@")
+				if version == "" {
+					// Resolved above, find it from manifestLabel
+					_, v, _ := strings.Cut(manifestLabel, "@")
+					m.Version = v
+				}
+			}
+
+			if verbose {
+				fmt.Fprintf(os.Stderr, "manifest: %s (%d entries)\n", manifestLabel, len(m.Entries))
 			}
 
 			host := strings.TrimRight(defaultHost, "/")
@@ -188,7 +257,48 @@ The manifest is used locally — no upload needed.
 	cmd.MarkFlagRequired("prefix")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show what would be downloaded")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "show per-entry progress (cached/downloaded)")
+	cmd.Flags().StringVarP(&file, "file", "f", "", "local manifest file")
 	return cmd
+}
+
+// resolveLatestManifestVersion fetches the version list for a manifest name
+// from the server and returns the latest semver.
+func resolveLatestManifestVersion(client *http.Client, host, name string) (string, error) {
+	u, err := url.JoinPath(host, "/api/manifest")
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Get(u)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("list manifests: %s", resp.Status)
+	}
+
+	var all map[string][]string
+	if err := json.NewDecoder(resp.Body).Decode(&all); err != nil {
+		return "", fmt.Errorf("decode manifest list: %w", err)
+	}
+
+	versions, ok := all[name]
+	if !ok || len(versions) == 0 {
+		return "", fmt.Errorf("no versions found for %s", name)
+	}
+
+	// Filter valid semvers and sort ascending
+	var valid []string
+	for _, v := range versions {
+		if semver.IsValid(v) {
+			valid = append(valid, v)
+		}
+	}
+	if len(valid) == 0 {
+		return "", fmt.Errorf("no valid semver versions found for %s", name)
+	}
+	semver.Sort(valid)
+	return valid[len(valid)-1], nil
 }
 
 func downloadBlob(client *http.Client, url, dest string) (downloaded bool, err error) {
@@ -239,7 +349,7 @@ func downloadBlob(client *http.Client, url, dest string) (downloaded bool, err e
 		return false, err
 	}
 
-	f, err := os.Create(dest)
+	f, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
 	if err != nil {
 		return false, err
 	}
