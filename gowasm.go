@@ -307,7 +307,7 @@ func (b *GoWasmBuilder) doBuild(reqCtx context.Context, importPath, version, rem
 		if _, err := cloneGist(ctx, importPath, version, gistDir); err != nil {
 			return "", err
 		}
-		wasmPath, err = buildGoModule(ctx, gistDir, "", tmpDir, false, importPath)
+		wasmPath, err = buildGoModule(ctx, gistDir, "", tmpDir, false)
 	} else {
 		// Resolve version and download module to cache
 		resolved, err := resolveSpec(ctx, importPath, version)
