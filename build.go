@@ -128,11 +128,27 @@ func isModuleName(modDir, name string) bool {
 	return false
 }
 
-func buildGoModule(ctx context.Context, modDir string, subPkg string, tmpDir string, useTinyGo bool) (string, error) {
+func buildGoModule(ctx context.Context, modDir string, subPkg string, tmpDir string, useTinyGo bool, moduleName string) (string, error) {
+	// If go.mod not at modDir, search along subPkg path components.
+	// resolveSpec may resolve to VCS root when the actual module go.mod
+	// is deeper in the tree (e.g. src/cmd/go.mod inside a VCS root).
+	if subPkg != "" {
+		parts := strings.Split(subPkg, "/")
+		for i := len(parts); i >= 1; i-- {
+			candidate := filepath.Join(modDir, filepath.Join(parts[:i]...))
+			if _, err := os.Stat(filepath.Join(candidate, "go.mod")); err == nil {
+				slog.Info("found go.mod in subpackage path, using as module root",
+					"dir", candidate)
+				modDir = candidate
+				subPkg = strings.Join(parts[i:], "/")
+				break
+			}
+		}
+	}
 	// Initialize go.mod if missing (e.g. for gists without one)
 	if _, err := os.Stat(filepath.Join(modDir, "go.mod")); os.IsNotExist(err) {
-		slog.Info("go mod init gist", "dir", modDir)
-		initCmd := exec.CommandContext(ctx, "go", "mod", "init", "gist")
+		slog.Info("go mod init", "dir", modDir, "module", moduleName)
+		initCmd := exec.CommandContext(ctx, "go", "mod", "init", moduleName)
 		initCmd.Dir = modDir
 		initCmd.Env = append(os.Environ(), "GOWORK=off")
 		initCmd.Stderr = new(bytes.Buffer)
@@ -258,7 +274,7 @@ func buildFromSource(ctx context.Context, spec resolvedSpec, tmpDir string, useT
 		return "", fmt.Errorf("copy module source: %w", err)
 	}
 
-	return buildGoModule(ctx, modDir, spec.Path, tmpDir, useTinyGo)
+	return buildGoModule(ctx, modDir, spec.Path, tmpDir, useTinyGo, spec.Pkg)
 }
 
 func runBuild(spec string, keepTmp bool, useTinyGo bool) error {
@@ -293,7 +309,7 @@ func runBuild(spec string, keepTmp bool, useTinyGo bool) error {
 		}
 		parts := strings.Split(strings.TrimRight(importPath, "/"), "/")
 		pkgBase = parts[len(parts)-1]
-		wasmPath, err = buildGoModule(ctx, gistDir, "", tmpDir, useTinyGo)
+		wasmPath, err = buildGoModule(ctx, gistDir, "", tmpDir, useTinyGo, importPath)
 	} else {
 		// Resolve version and download module in one step
 		resolved, err := resolveSpec(ctx, importPath, version)

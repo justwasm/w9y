@@ -156,6 +156,22 @@ func (b *GoWasmBuilder) doTinyBuild(reqCtx context.Context, importPath, version,
 		modRoot = modDir
 		if resolved.Path != "" {
 			buildDir = filepath.Join(modDir, resolved.Path)
+			// Look for go.mod along the subpackage path (resolveSpec may
+			// resolve to VCS root when the actual module is deeper).
+			parts := strings.Split(resolved.Path, "/")
+			for i := len(parts); i >= 1; i-- {
+				candidate := filepath.Join(modDir, filepath.Join(parts[:i]...))
+				if _, err := os.Stat(filepath.Join(candidate, "go.mod")); err == nil {
+					slog.Info("found go.mod in subpackage path, using as module root",
+						"dir", candidate)
+					modRoot = candidate
+					buildDir = candidate
+					if i < len(parts) {
+						buildDir = filepath.Join(candidate, filepath.Join(parts[i:]...))
+					}
+					break
+				}
+			}
 		}
 	}
 
