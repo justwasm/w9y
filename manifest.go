@@ -34,8 +34,8 @@ type ManifestEntry struct {
 //	version <semver>    — shared default version (optional)
 //	<output> <import>   — entry line
 //	<output> <import>@<ver> — entry with per-entry version override
-func ParseManifest(data []byte) (*Manifest, error) {
-	f, err := modfile.ParseLax("manifest.mod", data, nil)
+func ParseManifest(filename string, data []byte) (*Manifest, error) {
+	f, err := modfile.ParseLax(filename, data, nil)
 	if err != nil {
 		return nil, fmt.Errorf("parse manifest: %w", err)
 	}

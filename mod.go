@@ -59,7 +59,7 @@ func newModParseCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			m, err := ParseManifest(data)
+			m, err := ParseManifest(args[0], data)
 			if err != nil {
 				return err
 			}
@@ -86,7 +86,7 @@ Formatting: sorting entries alphabetically, aligning columns.`,
 			if err != nil {
 				return err
 			}
-			m, err := ParseManifest(data)
+			m, err := ParseManifest(args[0], data)
 			if err != nil {
 				return err
 			}
@@ -194,7 +194,7 @@ Each entry is built via the remote /go/ endpoint (W9Y env var).
 			// Process each manifest
 			var allErrors []error
 			for _, src := range sources {
-				m, err := ParseManifest(src.data)
+				m, err := ParseManifest(src.label, src.data)
 				if err != nil {
 					allErrors = append(allErrors, fmt.Errorf("%s: parse: %w", src.label, err))
 					continue
@@ -437,7 +437,7 @@ func newModUploadCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			m, err := ParseManifest(data)
+			m, err := ParseManifest(args[0], data)
 			if err != nil {
 				return err
 			}

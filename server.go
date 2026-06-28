@@ -514,7 +514,7 @@ func handleManifestAPI(w http.ResponseWriter, r *http.Request, mstore *ManifestS
 			return
 		}
 		// Validate by parsing
-		if _, err := ParseManifest(body); err != nil {
+		if _, err := ParseManifest("manifest", body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -581,7 +581,7 @@ func handleManifestEntry(w http.ResponseWriter, r *http.Request, mstore *Manifes
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		m, err := ParseManifest(data)
+		m, err := ParseManifest("manifest", data)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -629,7 +629,7 @@ func handleManifestEntry(w http.ResponseWriter, r *http.Request, mstore *Manifes
 		return
 	}
 
-	m, err := ParseManifest(data)
+	m, err := ParseManifest("manifest", data)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

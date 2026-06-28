@@ -763,7 +763,7 @@ bin/vet   golang.org/x/tools/cmd/vet
 // External tool with per-entry version
 bin/esbuild   github.com/evanw/esbuild/cmd/esbuild@v0.25.0
 `)
-	m, err := ParseManifest(data)
+	m, err := ParseManifest("-", data)
 	if err != nil {
 		t.Fatalf("ParseManifest: %v", err)
 	}
@@ -804,7 +804,7 @@ func TestParseManifestMinimal(t *testing.T) {
 
 bin/go  cmd/go
 `)
-	m, err := ParseManifest(data)
+	m, err := ParseManifest("-", data)
 	if err != nil {
 		t.Fatalf("ParseManifest: %v", err)
 	}
@@ -826,14 +826,14 @@ bin/go  cmd/go
 }
 
 func TestParseManifestRequiresModule(t *testing.T) {
-	_, err := ParseManifest([]byte("go 1.26\nversion v1.0.0\n"))
+	_, err := ParseManifest("-", []byte("go 1.26\nversion v1.0.0\n"))
 	if err == nil {
 		t.Fatal("expected error for missing module directive")
 	}
 }
 
 func TestParseManifestRejectsEmptyImport(t *testing.T) {
-	_, err := ParseManifest([]byte("module m\n\nbin/go\n"))
+	_, err := ParseManifest("-", []byte("module m\n\nbin/go\n"))
 	if err == nil {
 		t.Fatal("expected error for entry without source")
 	}
@@ -863,7 +863,7 @@ bin/go  cmd/go
 	if rec.Code != http.StatusOK {
 		t.Fatalf("get manifest status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	m, err := ParseManifest(rec.Body.Bytes())
+	m, err := ParseManifest("-", rec.Body.Bytes())
 	if err != nil {
 		t.Fatalf("ParseManifest: %v", err)
 	}
@@ -960,7 +960,7 @@ func TestFormatManifest(t *testing.T) {
 	}
 
 	// Should be parseable
-	m2, err := ParseManifest([]byte(got))
+	m2, err := ParseManifest("-", []byte(got))
 	if err != nil {
 		t.Fatalf("ParseManifest(format): %v", err)
 	}
