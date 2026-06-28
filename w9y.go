@@ -4,15 +4,18 @@ import (
 	"bytes"
 	"cmp"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -30,6 +33,36 @@ var defaultHost = cmp.Or(os.Getenv("W9Y"), "https://w9y.up.railway.app/")
 var dataDir string
 
 var ErrPathNotFound = errors.New("path not found")
+
+// wasmReplacements are go mod edit -replace directives applied before tidy
+// to swap packages with WASM-compatible forks.
+var wasmReplacements = []string{
+	"github.com/atotto/clipboard=github.com/justwasm/clipboard@v0.1.6",
+	"charm.land/bubbletea/v2=github.com/bubbletui/bubbletea/v2@v2.0.12",
+}
+
+// runGoModReplace runs "go mod edit -replace ..." with wasmReplacements.
+func runGoModReplace(ctx context.Context, dir string) error {
+	args := []string{"mod", "edit"}
+	for _, r := range wasmReplacements {
+		args = append(args, "-replace", r)
+	}
+	replaceCtx, cancel := context.WithTimeout(ctx, 1*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(replaceCtx, "go", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	cmd.Stderr = new(bytes.Buffer)
+	slog.Info("go mod edit -replace", "dir", dir)
+	if err := cmd.Run(); err != nil {
+		stderr := cmd.Stderr.(*bytes.Buffer).String()
+		if stderr != "" {
+			fmt.Fprint(os.Stderr, stderr)
+		}
+		return fmt.Errorf("go mod edit -replace: %w", err)
+	}
+	return nil
+}
 
 type Blob struct {
 	Hash string `json:"hash"`

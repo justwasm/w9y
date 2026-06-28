@@ -159,23 +159,9 @@ func (b *GoWasmBuilder) doTinyBuild(reqCtx context.Context, importPath, version,
 		}
 	}
 
-	// Apply replace directives for WASM compatibility (clipboard, bubbletea)
-	replaceCtx, replaceCancel := context.WithTimeout(ctx, 1*time.Minute)
-	defer replaceCancel()
-
-	slog.Info("go mod edit -replace", "dir", modRoot)
-	replaceCmd := exec.CommandContext(replaceCtx, "go", "mod", "edit",
-		"-replace", "github.com/atotto/clipboard=github.com/justwasm/clipboard@v0.1.6",
-		"-replace", "charm.land/bubbletea/v2=github.com/bubbletui/bubbletea/v2@v2.0.10")
-	replaceCmd.Dir = modRoot
-	replaceCmd.Env = append(os.Environ(), "GOWORK=off")
-	replaceCmd.Stderr = new(bytes.Buffer)
-	if err := replaceCmd.Run(); err != nil {
-		stderr := replaceCmd.Stderr.(*bytes.Buffer).String()
-		if stderr != "" {
-			fmt.Fprint(os.Stderr, stderr)
-		}
-		return "", fmt.Errorf("go mod edit -replace: %w", err)
+	// Apply WASM-compatible replace directives before tidy
+	if err := runGoModReplace(ctx, modRoot); err != nil {
+		return "", err
 	}
 
 	// Run go mod tidy to resolve dependencies

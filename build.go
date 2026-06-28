@@ -172,23 +172,9 @@ func buildGoModule(ctx context.Context, modDir string, subPkg string, tmpDir str
 		}
 	}
 
-	// Run go mod edit -replace before tidy to swap clipboard fork
-	replaceCtx, replaceCancel := context.WithTimeout(ctx, 1*time.Minute)
-	defer replaceCancel()
-
-	slog.Info("go mod edit -replace", "dir", modDir)
-	replaceCmd := exec.CommandContext(replaceCtx, "go", "mod", "edit",
-		"-replace", "github.com/atotto/clipboard=github.com/justwasm/clipboard@v0.1.6",
-		"-replace", "charm.land/bubbletea/v2=github.com/bubbletui/bubbletea/v2@v2.0.10")
-	replaceCmd.Dir = modDir
-	replaceCmd.Env = append(os.Environ(), "GOWORK=off")
-	replaceCmd.Stderr = new(bytes.Buffer)
-	if err := replaceCmd.Run(); err != nil {
-		stderr := replaceCmd.Stderr.(*bytes.Buffer).String()
-		if stderr != "" {
-			fmt.Fprint(os.Stderr, stderr)
-		}
-		return "", fmt.Errorf("go mod edit -replace: %w", err)
+	// Apply WASM-compatible replace directives before tidy
+	if err := runGoModReplace(ctx, modDir); err != nil {
+		return "", err
 	}
 
 	// Run go mod tidy to resolve dependencies and generate go.sum
