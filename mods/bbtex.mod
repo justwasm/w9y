@@ -1,6 +1,6 @@
 module bbtex
 
-version v2.0.10
+version v2.0.12
 
 examples/altscreen-toggle       github.com/bubbletui/bubbletea/v2/examples/altscreen-toggle
 examples/autocomplete           github.com/bubbletui/bubbletea/v2/examples/autocomplete
