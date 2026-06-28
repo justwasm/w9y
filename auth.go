@@ -20,7 +20,7 @@ const (
 )
 
 var (
-	githubClientID     = os.Getenv("GITHUB_CLIENT_ID")
+	githubClientID     = getenv("GITHUB_CLIENT_ID", githubClientIDPublic)
 	githubClientSecret = os.Getenv("GITHUB_CLIENT_SECRET")
 	sessionSecret      = os.Getenv("W9Y_SESSION_SECRET")
 	githubOrg          = "justwasm"
