@@ -1,5 +1,6 @@
-module go4js
+module go
 
-version v0.0.3
+version v0.1.0
 
-go4js  github.com/btwiuse/dl/go4js
+./go github.com/btwiuse/dl/go4js
+gotip github.com/btwiuse/dl/gotip
