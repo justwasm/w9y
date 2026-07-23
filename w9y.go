@@ -38,7 +38,7 @@ var ErrPathNotFound = errors.New("path not found")
 // to swap packages with WASM-compatible forks.
 var wasmReplacements = []string{
 	"github.com/atotto/clipboard=github.com/justwasm/clipboard@v0.1.6",
-	"charm.land/bubbletea/v2=github.com/bubbletui/bubbletea/v2@v2.0.12",
+	"charm.land/bubbletea/v2=github.com/bubbletui/bubbletea/v2@v2.0.15",
 }
 
 // runGoModReplace runs "go mod edit -replace ..." with wasmReplacements.
