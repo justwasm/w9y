@@ -12,6 +12,15 @@ export CGO_ENABLED=0
 
 export GONOSUMDB='*'
 
+# TODO: remove this section after go1.27 && compatible tinygo release
+command -v go1.27rc2 || {
+  go install golang.org/dl/go1.27rc2@latest
+
+  go1.27rc2 download
+
+  ln -sf `which go1.27rc2` `which go`
+}
+
 go version
 
 tinygo version
