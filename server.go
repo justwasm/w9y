@@ -156,6 +156,11 @@ func NewServer(dataDir string) http.Handler {
 				webHandler().ServeHTTP(w, r)
 				return
 			}
+			// Serve other embedded web assets (e.g. /css/foo.css, /index.html).
+			if webHasFile(remotePath) {
+				webHandler().ServeHTTP(w, r)
+				return
+			}
 			handleDownload(w, r, store, dataDir, remotePath)
 		case http.MethodDelete:
 			if authEnabled() && getUsername(r) == "" {
