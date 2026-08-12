@@ -27,11 +27,12 @@ header.nav {
   font-weight: 600; font-size: var(--fs-md); color: var(--text); letter-spacing: -0.01em;
 }
 .brand:hover { text-decoration: none; color: var(--text); }
-.brand-mark {
-  width: 26px; height: 26px; border-radius: 7px;
+.brand-cubes { display: inline-flex; align-items: center; gap: 6px; }
+.brand-cube {
+  width: 36px; height: 36px; border-radius: 9px;
   background: var(--accent); color: #fff;
   display: inline-flex; align-items: center; justify-content: center;
-  font-size: 11px; font-weight: 700; letter-spacing: -0.02em;
+  font-size: 18px; font-weight: 700; letter-spacing: -0.02em;
 }
 .nav-spacer { flex: 1; }
 .nav-actions { display: flex; align-items: center; gap: 6px; }

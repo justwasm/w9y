@@ -5,7 +5,33 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>w9y — WebAssembly blob hosting</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%237c3aed'/%3E%3Ctext x='50%25' y='56%25' text-anchor='middle' font-family='ui-sans-serif,system-ui' font-size='28' font-weight='700' fill='white'%3Ew9y%3C/text%3E%3C/svg%3E">
+<meta name="description" content="w9y hosts, builds, and serves WebAssembly blobs. Upload once, serve anywhere — content-addressed storage, automatic gzip, on-demand Go and TinyGo builds, and a Go module proxy for Gists.">
+<meta name="theme-color" content="#7c3aed" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0a0a0c" media="(prefers-color-scheme: dark)">
+
+<!-- Open Graph -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="w9y">
+<meta property="og:title" content="w9y — WebAssembly blob hosting">
+<meta property="og:description" content="Host, build, and serve WebAssembly from any Go module. Content-addressed storage, automatic gzip, on-demand Go and TinyGo builds.">
+<meta property="og:url" content="https://w9y.up.railway.app/">
+<meta property="og:image" content="https://w9y.up.railway.app/og.svg">
+<meta property="og:image:type" content="image/svg+xml">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+
+<!-- Twitter -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="w9y — WebAssembly blob hosting">
+<meta name="twitter:description" content="Host, build, and serve WebAssembly from any Go module. Content-addressed storage, automatic gzip, on-demand Go and TinyGo builds.">
+<meta name="twitter:image" content="https://w9y.up.railway.app/og.svg">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%237c3aed'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='central' text-anchor='middle' font-family='ui-sans-serif,system-ui' font-size='44' font-weight='700' fill='white'%3E9%3C/text%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="/icon-192.svg">
+<link rel="manifest" href="/manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="w9y">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
 <script>
   // No-flash theme: resolve before paint.
   (function() {
@@ -31,9 +57,12 @@
 
 <header class="nav">
   <div class="container nav-inner">
-    <a href="/" class="brand">
-      <span class="brand-mark">w9y</span>
-      <span>w9y</span>
+    <a href="/" class="brand" aria-label="w9y — home">
+      <span class="brand-cubes" aria-hidden="true">
+        <span class="brand-cube">W</span>
+        <span class="brand-cube">9</span>
+        <span class="brand-cube">Y</span>
+      </span>
     </a>
     <div class="nav-spacer"></div>
     <div class="nav-actions">
