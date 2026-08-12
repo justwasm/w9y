@@ -1,0 +1,18 @@
+/* ============================================================ RESPONSIVE */
+@media (max-width: 900px) {
+  .container { padding: 0 20px; }
+  .hero { padding: 56px 0 40px; }
+  .hero h1 { font-size: var(--fs-xl); line-height: 36px; }
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .toolbar { flex-wrap: wrap; }
+  .search { order: 1; flex: 1 1 100%; }
+  .segmented { order: 2; }
+  .count-chip { order: 3; margin-left: auto; }
+}
+@media (max-width: 520px) {
+  .stats { grid-template-columns: 1fr; }
+  .hero { padding: 40px 0 28px; }
+  .hero h1 { font-size: 24px; line-height: 32px; }
+  .nav-actions .btn:not(.btn-primary) { display: none; }
+  .user-chip .user-name { display: none; }
+}

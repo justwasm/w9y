@@ -1,0 +1,236 @@
+/* ============================================================ BUTTONS */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 36px; padding: 0 14px;
+  border-radius: var(--radius-sm); border: 1px solid transparent;
+  font-size: var(--fs-base); font-weight: 500;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast), transform var(--t-fast);
+  white-space: nowrap;
+}
+.btn:active { transform: scale(0.97); }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--accent-hover); color: #fff; text-decoration: none; }
+.btn-secondary { background: var(--bg-subtle); color: var(--text); border-color: var(--border); }
+.btn-secondary:hover { background: var(--border); text-decoration: none; }
+.btn-ghost { color: var(--text-muted); padding: 0 8px; }
+.btn-ghost:hover { color: var(--text); background: var(--bg-subtle); text-decoration: none; }
+.btn-icon {
+  width: 36px; height: 36px; padding: 0; justify-content: center;
+  border-radius: var(--radius-sm);
+}
+.btn-danger-ghost { color: var(--danger); }
+.btn-danger-ghost:hover { background: color-mix(in oklab, var(--danger) 12%, transparent); text-decoration: none; }
+.btn[disabled] { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+
+/* ============================================================ STATS */
+.stats {
+  display: grid; gap: 16px;
+  grid-template-columns: repeat(4, 1fr);
+  margin-bottom: 32px;
+}
+.stat-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  box-shadow: var(--shadow-1);
+}
+.stat-label {
+  font-size: var(--fs-xs); font-weight: 500;
+  letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+.stat-value {
+  font-size: var(--fs-lg); font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.stat-foot {
+  margin-top: 8px;
+  font-size: var(--fs-xs); color: var(--text-muted);
+}
+.stat-bar {
+  display: flex; height: 6px; border-radius: 999px; overflow: hidden;
+  background: var(--bg-subtle); margin-top: 12px;
+}
+.stat-bar-seg { height: 100%; }
+.stat-legend {
+  display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 12px;
+  font-size: var(--fs-xs); color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.stat-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.stat-legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+.spark { width: 100%; height: 28px; margin-top: 10px; display: block; color: var(--accent); }
+
+/* ============================================================ TOOLBAR */
+.toolbar {
+  display: flex; gap: 12px; align-items: center;
+  padding: 16px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+.search {
+  position: relative; flex: 1; min-width: 200px;
+}
+.search input {
+  width: 100%; height: 36px;
+  padding: 0 12px 0 34px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--fs-base);
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+.search input::placeholder { color: var(--text-muted); }
+.search input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 22%, transparent); }
+.search-icon {
+  position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  color: var(--text-muted); pointer-events: none;
+}
+.search-icon svg { width: 14px; height: 14px; display: block; }
+.search-kbd {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  font-family: var(--ff-mono); font-size: 11px;
+  color: var(--text-muted);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 1px 5px; background: var(--bg);
+}
+
+/* Segmented control */
+.segmented {
+  position: relative;
+  display: inline-flex;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px;
+}
+.segmented-option {
+  position: relative; z-index: 1;
+  padding: 4px 12px; font-size: var(--fs-sm); font-weight: 500;
+  color: var(--text-muted);
+  border-radius: 4px;
+  transition: color var(--t-fast);
+}
+.segmented-option[aria-pressed="true"] { color: var(--text); }
+.segmented-option:hover { color: var(--text); }
+.segmented-knob {
+  position: absolute; top: 3px; bottom: 3px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: var(--shadow-1);
+  transition: transform 180ms var(--ease-out), width 180ms var(--ease-out);
+  z-index: 0;
+}
+.count-chip {
+  font-size: var(--fs-xs); color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  padding-left: 4px;
+}
+
+/* ============================================================ TABLE */
+.table-wrap {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 32px;
+}
+.table-scroll { overflow-x: auto; }
+table.entries {
+  width: 100%;
+  border-collapse: separate; border-spacing: 0;
+  font-size: var(--fs-sm);
+  min-width: 720px;
+}
+.entries caption { text-align: left; }
+.entries thead th {
+  position: sticky; top: 0;
+  text-align: left;
+  padding: 12px 14px;
+  font-size: var(--fs-xs); font-weight: 500;
+  color: var(--text-muted);
+  letter-spacing: 0.04em; text-transform: uppercase;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  cursor: pointer; user-select: none;
+}
+.entries thead th.no-sort { cursor: default; }
+.entries thead th:hover { color: var(--text); }
+.entries thead th .sort-ind {
+  display: inline-block; width: 10px; text-align: center;
+  color: var(--accent);
+  font-size: 10px;
+}
+.entries tbody td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+}
+.entries tbody tr:last-child td { border-bottom: 0; }
+.entries tbody tr {
+  transition: background var(--t-fast), box-shadow var(--t-fast);
+}
+.entries tbody tr:hover td { background: var(--bg-subtle); }
+.path-cell {
+  font-family: var(--ff-mono);
+  font-size: 12.5px;
+  word-break: break-all;
+}
+.path-cell a { color: var(--text); }
+.path-cell a:hover { color: var(--accent); text-decoration: none; }
+.runtime-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  margin-right: 8px; vertical-align: 1px;
+}
+.runtime-go { background: var(--runtime-go); }
+.runtime-tinygo { background: var(--runtime-tinygo); }
+.runtime-manual { background: var(--runtime-manual); }
+.runtime-alias { background: var(--runtime-alias); margin-right: 4px; }
+.alias-label {
+  display: inline-block;
+  font-family: var(--ff-sans); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.05em; text-transform: uppercase;
+  padding: 1px 6px; border-radius: 4px;
+  background: color-mix(in oklab, var(--runtime-alias) 14%, transparent);
+  color: var(--runtime-alias);
+  margin-right: 6px;
+  vertical-align: 2px;
+}
+.hash-cell {
+  font-family: var(--ff-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: copy;
+  transition: color var(--t-fast);
+}
+.hash-cell:hover { color: var(--accent); }
+.time-cell { color: var(--text-muted); font-size: var(--fs-sm); white-space: nowrap; }
+.size-cell { text-align: right; color: var(--text); white-space: nowrap; }
+.del-cell { width: 40px; text-align: right; }
+.del-confirm {
+  display: inline-flex; align-items: center; gap: 4px;
+  animation: pop var(--t-med) var(--ease-out);
+}
+.del-confirm button {
+  height: 24px; padding: 0 8px;
+  font-size: 11px; font-weight: 500;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+.del-confirm .yes { background: var(--danger); color: #fff; border-color: var(--danger); }
+.empty {
+  padding: 64px 24px; text-align: center;
+  color: var(--text-muted); font-size: var(--fs-base);
+}
+.empty-title { color: var(--text); font-weight: 500; margin-bottom: 4px; }

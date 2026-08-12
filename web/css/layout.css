@@ -1,0 +1,110 @@
+/* ============================================================ LAYOUT PRIMITIVES */
+.container { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}
+.skip-link {
+  position: absolute; top: 8px; left: 8px; z-index: 100;
+  padding: 8px 12px; background: var(--accent); color: #fff;
+  border-radius: var(--radius-sm); font-weight: 500;
+  transform: translateY(-150%); transition: transform var(--t-med) var(--ease-out);
+}
+.skip-link:focus { transform: translateY(0); color: #fff; }
+
+/* ============================================================ NAV */
+header.nav {
+  position: sticky; top: 0; z-index: 50;
+  height: 56px;
+  background: color-mix(in oklab, var(--bg) 80%, transparent);
+  backdrop-filter: saturate(180%) blur(12px);
+  -webkit-backdrop-filter: saturate(180%) blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+.nav-inner { height: 100%; display: flex; align-items: center; gap: 16px; }
+.brand {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-weight: 600; font-size: var(--fs-md); color: var(--text); letter-spacing: -0.01em;
+}
+.brand:hover { text-decoration: none; color: var(--text); }
+.brand-mark {
+  width: 26px; height: 26px; border-radius: 7px;
+  background: var(--accent); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; letter-spacing: -0.02em;
+}
+.nav-spacer { flex: 1; }
+.nav-actions { display: flex; align-items: center; gap: 6px; }
+.user-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; height: 28px;
+  font-size: var(--fs-sm); color: var(--text-muted);
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--bg-elevated);
+}
+.user-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+
+/* Theme toggle icon swap */
+.theme-toggle svg { width: 18px; height: 18px; }
+.theme-toggle .icon-sun { display: none; }
+.theme-toggle .icon-moon { display: block; }
+[data-theme="dark"] .theme-toggle .icon-sun { display: block; }
+[data-theme="dark"] .theme-toggle .icon-moon { display: none; }
+
+/* ============================================================ HERO */
+.hero { padding: 80px 0 56px; }
+.eyebrow {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px;
+  background: var(--accent-bg); color: var(--accent);
+  font-size: var(--fs-xs); font-weight: 500;
+  letter-spacing: 0.04em; text-transform: uppercase;
+  margin-bottom: 20px;
+}
+.eyebrow-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.hero h1 {
+  font-size: var(--fs-2xl); line-height: 52px; font-weight: 700;
+  letter-spacing: -0.025em; color: var(--text);
+  max-width: 18ch; margin-bottom: 16px;
+}
+.hero .sub {
+  font-size: var(--fs-md); line-height: 26px; color: var(--text-muted);
+  max-width: 56ch; margin-bottom: 32px;
+}
+.hero .sub b { color: var(--text); font-weight: 600; }
+.code-block {
+  position: relative; max-width: 640px;
+  background: var(--bg-subtle); border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 16px 16px 18px;
+}
+.code-block pre {
+  font-size: 13px; line-height: 22px;
+  color: var(--text);
+  white-space: pre; overflow-x: auto;
+  font-variant-ligatures: none;
+}
+.code-block .comment { color: var(--text-muted); }
+.code-block .cmd { color: var(--accent); }
+.code-block .copy-btn {
+  position: absolute; top: 8px; right: 8px;
+  width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  background: transparent;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.code-block .copy-btn:hover { background: var(--border); color: var(--text); }
+.code-block .copy-btn svg { width: 14px; height: 14px; }
+
+/* ============================================================ FOOTER */
+footer.site {
+  margin-top: 16px; padding: 24px 0 40px;
+  border-top: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 16px; flex-wrap: wrap;
+  font-size: var(--fs-xs); color: var(--text-muted);
+}
+footer.site a { color: var(--text-muted); }
+footer.site a:hover { color: var(--text); }

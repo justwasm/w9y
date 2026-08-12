@@ -1,0 +1,107 @@
+/* ============================================================ TOKENS */
+:root {
+  /* Brand: electric violet */
+  --accent: #7c3aed;
+  --accent-hover: #6d28d9;
+  --accent-bg: #f5f3ff;
+
+  /* Surface (light defaults; overridden under [data-theme="dark"]) */
+  --bg: #ffffff;
+  --bg-elevated: #fafafa;
+  --bg-subtle: #f4f4f6;
+  --text: #0f0f12;
+  --text-muted: #71717a;
+  --text-faint: #a1a1aa;
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --danger: #dc2626;
+  --success: #16a34a;
+  --warning: #d97706;
+
+  /* Runtime accents (used as dots/chips) */
+  --runtime-go: #7c3aed;
+  --runtime-tinygo: #0891b2;
+  --runtime-manual: #71717a;
+  --runtime-alias: #db2777;
+
+  /* Type */
+  --ff-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --ff-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-base: 14px;
+  --fs-md: 16px;
+  --fs-lg: 20px;
+  --fs-xl: 28px;
+  --fs-2xl: 44px;
+
+  /* Geometry */
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --shadow-1: 0 1px 2px rgba(15, 15, 18, 0.04), 0 1px 1px rgba(15, 15, 18, 0.03);
+  --shadow-2: 0 8px 24px rgba(15, 15, 18, 0.08), 0 2px 6px rgba(15, 15, 18, 0.04);
+  --shadow-drawer: -16px 0 40px rgba(15, 15, 18, 0.12);
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
+  --t-fast: 80ms;
+  --t-med: 220ms;
+}
+
+[data-theme="dark"] {
+  --accent: #a78bfa;
+  --accent-hover: #c4b5fd;
+  --accent-bg: #2e1065;
+  --bg: #0a0a0c;
+  --bg-elevated: #131316;
+  --bg-subtle: #1c1c21;
+  --text: #f4f4f5;
+  --text-muted: #a1a1aa;
+  --text-faint: #52525b;
+  --border: #27272a;
+  --border-strong: #3f3f46;
+  --danger: #f87171;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --runtime-go: #a78bfa;
+  --runtime-tinygo: #22d3ee;
+  --runtime-manual: #a1a1aa;
+  --runtime-alias: #f472b6;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-drawer: -16px 0 40px rgba(0, 0, 0, 0.6);
+}
+
+/* ============================================================ MOTION */
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 30%, transparent); }
+  50% { box-shadow: 0 0 0 6px color-mix(in oklab, var(--accent) 0%, transparent); }
+}
+@keyframes shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-4px); }
+  40%, 60% { transform: translateX(4px); }
+}
+@keyframes pop {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.stat-card { animation: fadeUp 320ms var(--ease-out) both; }
+.stat-card:nth-child(1) { animation-delay: 0ms; }
+.stat-card:nth-child(2) { animation-delay: 60ms; }
+.stat-card:nth-child(3) { animation-delay: 120ms; }
+.stat-card:nth-child(4) { animation-delay: 180ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
