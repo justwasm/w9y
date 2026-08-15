@@ -22,7 +22,7 @@ func newEnvCommand() *cobra.Command {
 			}
 
 			vars := []envVar{
-				{"W9Y", getenv("W9Y", ""), "https://w9y.up.railway.app/", "Remote w9y server URL for CLI commands (upload, backup, restore, delete, get, list)"},
+				{"W9Y", getenv("W9Y", ""), "https://w9y.io/", "Remote w9y server URL for CLI commands (upload, backup, restore, delete, get, list)"},
 				{"DATA_DIR", getenv("DATA_DIR", ""), "data", "Data directory for local blob storage"},
 				{"PORT", getenv("PORT", ""), "8080", "Server listen port"},
 				{"GITHUB_CLIENT_ID", mask(getenv("GITHUB_CLIENT_ID", "")), "", "GitHub OAuth App client ID (enables web login)"},

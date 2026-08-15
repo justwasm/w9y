@@ -180,10 +180,10 @@ Examples:
 
 ```sh
 # Build and serve the latest version
-curl -o app.wasm https://w9y.up.railway.app/go/github.com/btwiuse/w9y/cmd/w9y@latest
+curl -o app.wasm https://w9y.io/go/github.com/btwiuse/w9y/cmd/w9y@latest
 
 # Build a specific version
-curl -o app.wasm https://w9y.up.railway.app/go/github.com/btwiuse/w9y/cmd/w9y@v0.1.0
+curl -o app.wasm https://w9y.io/go/github.com/btwiuse/w9y/cmd/w9y@v0.1.0
 ```
 
 The build process:
@@ -206,7 +206,7 @@ GET /go/gist.github.com/<user>/<id>@<commit> → build & serve WASM
 Example:
 
 ```sh
-curl -o app.wasm https://w9y.up.railway.app/go/gist.github.com/btwiuse/83e2efac358d22a009ece0a3f4feb801
+curl -o app.wasm https://w9y.io/go/gist.github.com/btwiuse/83e2efac358d22a009ece0a3f4feb801
 ```
 
 If the gist has no `go.mod`, one is auto-initialized with the correct module path.
@@ -222,8 +222,8 @@ GET /tinygo/<import-path>@<version> → build & serve WASM (TinyGo)
 TinyGo produces significantly smaller WASM binaries (typically 4-10x smaller than standard `go build`).
 
 ```sh
-curl -o app.wasm https://w9y.up.railway.app/tinygo/github.com/user/repo@latest
-curl -o app.wasm https://w9y.up.railway.app/tinygo/gist.github.com/user/id@commit
+curl -o app.wasm https://w9y.io/tinygo/github.com/user/repo@latest
+curl -o app.wasm https://w9y.io/tinygo/gist.github.com/user/id@commit
 ```
 
 ### wasm_exec.js
@@ -240,7 +240,7 @@ The JavaScript glue files needed to run WASM binaries in the browser are served 
 The server implements the Go module proxy protocol for gist paths, enabling `go get` / `go install` with gist modules:
 
 ```sh
-GOPROXY=https://w9y.up.railway.app/goproxy go get gist.github.com/<user>/<id>@<commit>
+GOPROXY=https://w9y.io/goproxy go get gist.github.com/<user>/<id>@<commit>
 ```
 
 Standard goproxy endpoints:

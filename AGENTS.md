@@ -31,7 +31,7 @@ go build -o /bin/w9y ./cmd/w9y
 go run ./cmd/w9y server
 PORT=8080 DATA_DIR=/var/lib/w9y go run ./cmd/w9y server
 
-# Run CLI commands against remote (default: https://w9y.up.railway.app/)
+# Run CLI commands against remote (default: https://w9y.io/)
 # Override with W9Y env var
 W9Y=http://localhost:8080 go run ./cmd/w9y upload foo.wasm
 W9Y=http://localhost:8080 go run ./cmd/w9y backup
@@ -105,7 +105,7 @@ All subcommands use Go's `flag` package with `flag.ContinueOnError`. Flag parsin
 | `mod upload` | `<file>` | Upload manifest to server |
 | `mod list` | | List manifests from server |
 
-Remote host is set via `W9Y` env var (default: `https://w9y.up.railway.app/`).
+Remote host is set via `W9Y` env var (default: `https://w9y.io/`).
 
 ## Key Patterns & Gotchas
 

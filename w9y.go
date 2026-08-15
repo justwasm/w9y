@@ -28,7 +28,7 @@ import (
 const defaultDataDir = "data"
 const pathsDirName = "paths"
 
-var defaultHost = cmp.Or(os.Getenv("W9Y"), "https://w9y.up.railway.app/")
+var defaultHost = cmp.Or(os.Getenv("W9Y"), "https://w9y.io/")
 
 var dataDir string
 

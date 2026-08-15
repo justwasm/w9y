@@ -28,6 +28,6 @@
   <text x="96" y="460" font-family="ui-sans-serif,system-ui,sans-serif" font-size="28" font-weight="400" fill="#a1a1aa">Host, build, and serve WebAssembly from any Go module.</text>
 
   <!-- Bottom row -->
-  <text x="96"  y="560" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="22" fill="#71717a">$ curl -o app.wasm w9y.up.railway.app/go/&#8230;</text>
-  <text x="1104" y="560" text-anchor="end" font-family="ui-sans-serif,system-ui,sans-serif" font-size="22" font-weight="500" fill="#71717a">w9y.up.railway.app</text>
+  <text x="96"  y="560" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="22" fill="#71717a">$ curl -o app.wasm w9y.io/go/&#8230;</text>
+  <text x="1104" y="560" text-anchor="end" font-family="ui-sans-serif,system-ui,sans-serif" font-size="22" font-weight="500" fill="#71717a">w9y.io</text>
 </svg>
