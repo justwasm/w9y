@@ -23,6 +23,7 @@ var (
 	githubClientID     = getenv("GITHUB_CLIENT_ID", githubClientIDPublic)
 	githubClientSecret = os.Getenv("GITHUB_CLIENT_SECRET")
 	sessionSecret      = os.Getenv("W9Y_SESSION_SECRET")
+	publicHostEnv      = getenv("HOST", "")
 	githubOrg          = "justwasm"
 )
 
@@ -117,14 +118,33 @@ func verifyBearerToken(token string) (string, bool) {
 	return user.Login, true
 }
 
+// publicHost returns the host as seen by the client, accounting for reverse
+// proxies that may rewrite the Host header. Prefers X-Forwarded-Host when
+// present, falling back to r.Host.
+func publicHost(r *http.Request) string {
+	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
+		return h
+	}
+	return r.Host
+}
+
 func handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	if !authEnabled() {
 		http.Error(w, "auth not configured", http.StatusServiceUnavailable)
 		return
 	}
-	callbackURL := "/api/auth/callback"
-	if r.TLS == nil && !strings.Contains(r.Host, "localhost") {
-		callbackURL = "https://" + r.Host + "/api/auth/callback"
+	var callbackURL string
+	if publicHostEnv != "" {
+		// Explicit HOST override always wins; reverse-proxy plumbing below is bypassed.
+		callbackURL = "https://" + publicHostEnv + "/api/auth/callback"
+	} else {
+		// Auto-detect from the request, honoring X-Forwarded-Host when a reverse
+		// proxy is in front of us. Fall back to a relative path for localhost dev.
+		callbackURL = "/api/auth/callback"
+		host := publicHost(r)
+		if r.TLS == nil && !strings.Contains(host, "localhost") {
+			callbackURL = "https://" + host + "/api/auth/callback"
+		}
 	}
  redirectTo := fmt.Sprintf(
 		"https://github.com/login/oauth/authorize?client_id=%s&scope=read:org&redirect_uri=%s",

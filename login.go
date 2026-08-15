@@ -19,7 +19,7 @@ const (
 	tokenURL         = "https://github.com/login/oauth/access_token"
 	tokenFile        = ".w9y/token"
 	deviceScope      = "read:org"
-	githubClientIDPublic = "Ov23liKPpQDyUeVkjNiI"
+	githubClientIDPublic = "Ov23liQtNkgFT24kpN4C"
 )
 
 func tokenPath() string {
