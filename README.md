@@ -7,7 +7,7 @@ Upload a `.wasm` file once, then serve any named `.wasm` path with gzip compress
 ## Install
 
 ```sh
-go install github.com/btwiuse/w9y/cmd/w9y@latest
+go install github.com/justwasm/w9y/cmd/w9y@latest
 ```
 
 ## Server
@@ -180,10 +180,10 @@ Examples:
 
 ```sh
 # Build and serve the latest version
-curl -o app.wasm https://w9y.io/go/github.com/btwiuse/w9y/cmd/w9y@latest
+curl -o app.wasm https://w9y.io/go/github.com/justwasm/w9y/cmd/w9y@latest
 
 # Build a specific version
-curl -o app.wasm https://w9y.io/go/github.com/btwiuse/w9y/cmd/w9y@v0.1.0
+curl -o app.wasm https://w9y.io/go/github.com/justwasm/w9y/cmd/w9y@v0.1.0
 ```
 
 The build process:

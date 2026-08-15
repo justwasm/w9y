@@ -23,8 +23,8 @@ to a canonical Go module version.
 Examples:
   w9y resolve github.com/gearshell/logo/cmd/logo@latest
   w9y resolve --json github.com/gearshell/logo/cmd/logo@latest
-  w9y resolve github.com/btwiuse/w9y/cmd/w9y@b45ecc4
-  w9y resolve github.com/btwiuse/w9y@v0.0.1
+  w9y resolve github.com/justwasm/w9y/cmd/w9y@b45ecc4
+  w9y resolve github.com/justwasm/w9y@v0.0.1
 `,
 		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {

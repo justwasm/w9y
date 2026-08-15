@@ -27,9 +27,9 @@ output path. Useful for local debugging of build issues.
 Use --tinygo to build with TinyGo instead of the standard Go compiler.
 
 Examples:
-  w9y build github.com/btwiuse/w9y/cmd/w9y@latest
-  w9y build github.com/btwiuse/w9y/cmd/w9y@v0.0.1
-  w9y build github.com/btwiuse/w9y/cmd/w9y@b45ecc4
+  w9y build github.com/justwasm/w9y/cmd/w9y@latest
+  w9y build github.com/justwasm/w9y/cmd/w9y@v0.0.1
+  w9y build github.com/justwasm/w9y/cmd/w9y@b45ecc4
   w9y build --tinygo github.com/user/repo/cmd/app@v0.1.0
 `,
 		Args: cobra.ExactArgs(1),
@@ -44,7 +44,7 @@ Examples:
 
 // resolvedSpec holds the components of a resolved build spec.
 type resolvedSpec struct {
-	Pkg     string `json:"pkg"`     // module import path (e.g. "github.com/btwiuse/w9y")
+	Pkg     string `json:"pkg"`     // module import path (e.g. "github.com/justwasm/w9y")
 	Path    string `json:"path"`    // subpackage path within the module (e.g. "cmd/w9y")
 	Version string `json:"version"` // resolved canonical version (e.g. "v0.0.0-20260616064018-2314db5ec7ed")
 	Dir     string `json:"-"`       // cached module directory from go mod download
@@ -205,13 +205,13 @@ func buildGoModule(ctx context.Context, modDir string, subPkg string, tmpDir str
 	var buildCmd *exec.Cmd
 	if useTinyGo {
 		args := []string{"build", "-o", wasmPath, "-target=wasm", "."}
-		slog.Info("tinygo " + strings.Join(args, " "), "dir", buildDir)
+		slog.Info("tinygo "+strings.Join(args, " "), "dir", buildDir)
 		buildCmd = exec.CommandContext(ctx, "tinygo", args...)
 		buildCmd.Dir = buildDir
 		buildCmd.Env = append(os.Environ(), "GOWORK=off")
 	} else {
 		args := []string{"build", "-trimpath", "-ldflags", "-s -w", "-o", wasmPath, "."}
-		slog.Info("go " + strings.Join(args, " "), "dir", buildDir)
+		slog.Info("go "+strings.Join(args, " "), "dir", buildDir)
 		buildCmd = exec.CommandContext(ctx, "go", args...)
 		buildCmd.Dir = buildDir
 		buildCmd.Env = append(os.Environ(),

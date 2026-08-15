@@ -146,7 +146,7 @@ func handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 			callbackURL = "https://" + host + "/api/auth/callback"
 		}
 	}
- redirectTo := fmt.Sprintf(
+	redirectTo := fmt.Sprintf(
 		"https://github.com/login/oauth/authorize?client_id=%s&scope=read:org&redirect_uri=%s",
 		githubClientID, callbackURL,
 	)

@@ -1,4 +1,4 @@
-module github.com/btwiuse/w9y
+module github.com/justwasm/w9y
 
 go 1.26.4
 

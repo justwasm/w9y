@@ -75,26 +75,26 @@ func NewServer(dataDir string) http.Handler {
 		}
 
 		// Serve wasm_exec.js glue files
-	if remotePath == goWasmPrefix+"wasm_exec.js" {
-		serveWasmExecJS(w, r, "go")
-		return
-	}
-	if remotePath == tinyGoWasmPrefix+"wasm_exec.js" {
-		serveWasmExecJS(w, r, "tinygo")
-		return
-	}
+		if remotePath == goWasmPrefix+"wasm_exec.js" {
+			serveWasmExecJS(w, r, "go")
+			return
+		}
+		if remotePath == tinyGoWasmPrefix+"wasm_exec.js" {
+			serveWasmExecJS(w, r, "tinygo")
+			return
+		}
 
-	// Serve version info
-	if remotePath == goWasmPrefix+"version" {
-		serveVersion(w, r, "go")
-		return
-	}
-	if remotePath == tinyGoWasmPrefix+"version" {
-		serveVersion(w, r, "tinygo")
-		return
-	}
+		// Serve version info
+		if remotePath == goWasmPrefix+"version" {
+			serveVersion(w, r, "go")
+			return
+		}
+		if remotePath == tinyGoWasmPrefix+"version" {
+			serveVersion(w, r, "tinygo")
+			return
+		}
 
-	// Go WASM: build-on-demand from import path
+		// Go WASM: build-on-demand from import path
 		if isGoWasmPath(remotePath) {
 			if r.Method == http.MethodDelete {
 				if authEnabled() && getUsername(r) == "" {
@@ -196,12 +196,12 @@ func handleList(w http.ResponseWriter, store BlobStore, dataDir string) {
 	}
 
 	type item struct {
-		Path   string `json:"path"`
-		Hash   string `json:"hash"`
-		Time   string `json:"time"`
-		Size   string `json:"size"`
-		Alias  string `json:"alias,omitempty"`
-		epoch  int64
+		Path  string `json:"path"`
+		Hash  string `json:"hash"`
+		Time  string `json:"time"`
+		Size  string `json:"size"`
+		Alias string `json:"alias,omitempty"`
+		epoch int64
 	}
 	items := make([]item, 0, len(entries)+len(aliases))
 	for p, e := range entries {

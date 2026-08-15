@@ -19,7 +19,7 @@ The blob itself is not removed — run gc on the server to clean up orphans.
 
 Examples:
   w9y delete /hush.wasm
-  w9y delete /go/github.com/btwiuse/w9y/cmd/w9y@v0.0.1
+  w9y delete /go/github.com/justwasm/w9y/cmd/w9y@v0.0.1
 `,
 		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {

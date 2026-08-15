@@ -28,7 +28,7 @@ func isGoWasmPath(remotePath string) bool {
 
 // goWasmPath contains the parsed components of a /go/ URL path.
 type goWasmPath struct {
-	ImportPath string // full import path (e.g. "github.com/btwiuse/w9y/cmd/w9y")
+	ImportPath string // full import path (e.g. "github.com/justwasm/w9y/cmd/w9y")
 	Version    string // version tag (e.g. "v0.1.0"), empty if not specified
 }
 

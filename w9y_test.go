@@ -568,10 +568,10 @@ func TestParseGoWasmPath(t *testing.T) {
 		wantVersion    string
 		wantOK         bool
 	}{
-		{"/go/github.com/btwiuse/w9y/cmd/w9y@v0.1.0", "github.com/btwiuse/w9y/cmd/w9y", "v0.1.0", true},
-		{"/go/github.com/btwiuse/w9y/cmd/w9y@latest", "github.com/btwiuse/w9y/cmd/w9y", "latest", true},
-		{"/go/github.com/btwiuse/w9y/cmd/w9y", "github.com/btwiuse/w9y/cmd/w9y", "", true},
-		{"/go/github.com/btwiuse/w9y", "github.com/btwiuse/w9y", "", true},
+		{"/go/github.com/justwasm/w9y/cmd/w9y@v0.1.0", "github.com/justwasm/w9y/cmd/w9y", "v0.1.0", true},
+		{"/go/github.com/justwasm/w9y/cmd/w9y@latest", "github.com/justwasm/w9y/cmd/w9y", "latest", true},
+		{"/go/github.com/justwasm/w9y/cmd/w9y", "github.com/justwasm/w9y/cmd/w9y", "", true},
+		{"/go/github.com/justwasm/w9y", "github.com/justwasm/w9y", "", true},
 		{"/go/", "", "", false},
 		{"/go/@v0.1.0", "", "", false}, // empty import path
 	}
@@ -593,7 +593,7 @@ func TestGoWasmPathWithNoVersionRedirectsToLatest(t *testing.T) {
 	dir := t.TempDir()
 	server := NewServer(dir)
 
-	req := httptest.NewRequest(http.MethodGet, "/go/github.com/btwiuse/w9y", nil)
+	req := httptest.NewRequest(http.MethodGet, "/go/github.com/justwasm/w9y", nil)
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -603,8 +603,8 @@ func TestGoWasmPathWithNoVersionRedirectsToLatest(t *testing.T) {
 	}
 	if rec.Code == http.StatusFound {
 		loc := rec.Header().Get("Location")
-		if !strings.HasPrefix(loc, "/go/github.com/btwiuse/w9y@") {
-			t.Fatalf("Location = %q, want /go/github.com/btwiuse/w9y@...", loc)
+		if !strings.HasPrefix(loc, "/go/github.com/justwasm/w9y@") {
+			t.Fatalf("Location = %q, want /go/github.com/justwasm/w9y@...", loc)
 		}
 	}
 }
@@ -613,7 +613,7 @@ func TestGoWasmPathWithLatestRedirectsToVersion(t *testing.T) {
 	dir := t.TempDir()
 	server := NewServer(dir)
 
-	req := httptest.NewRequest(http.MethodGet, "/go/github.com/btwiuse/w9y@latest", nil)
+	req := httptest.NewRequest(http.MethodGet, "/go/github.com/justwasm/w9y@latest", nil)
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 

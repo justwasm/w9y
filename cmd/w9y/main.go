@@ -6,7 +6,7 @@ import (
 
 	"charm.land/fang/v2"
 
-	"github.com/btwiuse/w9y"
+	"github.com/justwasm/w9y"
 )
 
 func main() {

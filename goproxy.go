@@ -320,7 +320,6 @@ func commitFromVersion(version string) string {
 	return version
 }
 
-
 func commitTime(ctx context.Context, repoDir string) (time.Time, error) {
 	cmd := exec.CommandContext(ctx, "git", "log", "-1", "--format=%ct")
 	cmd.Dir = repoDir

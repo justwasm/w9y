@@ -25,7 +25,7 @@ w9y server and saving it locally.
 Examples:
   w9y get golang.org/dl/gotip@latest
   w9y get --tinygo github.com/bubbletui/bubbletea/v2/examples/chat@v2.0.9
-  w9y get -o my.wasm github.com/btwiuse/w9y/cmd/w9y@latest
+  w9y get -o my.wasm github.com/justwasm/w9y/cmd/w9y@latest
   w9y get gist.github.com/btwiuse/83e2efac358d22a009ece0a3f4feb801
 `,
 		Args: cobra.ExactArgs(1),

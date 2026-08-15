@@ -11,9 +11,9 @@ import (
 // Manifest describes a named group of WASM output files mapped to Go import
 // paths, using a go.mod-like format.
 type Manifest struct {
-	Module    string          // manifest name (e.g. "go")
-	GoVersion string          // Go toolchain version (optional)
-	Version   string          // shared default version (optional)
+	Module    string // manifest name (e.g. "go")
+	GoVersion string // Go toolchain version (optional)
+	Version   string // shared default version (optional)
 	Entries   []ManifestEntry
 }
 
@@ -86,5 +86,3 @@ func ParseManifest(filename string, data []byte) (*Manifest, error) {
 
 	return m, nil
 }
-
-
