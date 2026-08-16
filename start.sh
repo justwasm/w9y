@@ -18,7 +18,7 @@ command -v go1.27rc3 || {
 
   go1.27rc3 download
 
-  ln -sf `which go1.27rc3` `which go`
+  ln -sf `which go1.27rc3` /bin/go
 }
 
 go version
