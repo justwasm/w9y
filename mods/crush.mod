@@ -1,5 +1,5 @@
 module crush
 
-version v0.87.0
+version v0.89.0
 
 crush  github.com/justwasm/crush
