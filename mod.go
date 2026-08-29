@@ -397,8 +397,13 @@ type applyEntry struct {
 
 // isTerminal reports whether stdout is a character device. A Stat-based
 // check (no build tags) so it is safe under js/wasm, where Stat fails
-// and headless (plain) output is always used.
+// and headless (plain) output is always used. TERM_WINCH is honored as
+// an explicit opt-in for hosts that cannot report a real TTY (e.g. a
+// remote orchestrator piping through a PTY wrapper).
 func isTerminal() bool {
+	if os.Getenv("TERM_WINCH") != "" {
+		return true
+	}
 	fi, err := os.Stdout.Stat()
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
