@@ -3,6 +3,7 @@ package w9y
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -110,6 +111,7 @@ func newModApplyCommand() *cobra.Command {
 	var dryRun bool
 	var verbose bool
 	var files []string
+	var progress string
 
 	cmd := &cobra.Command{
 		Use:   "apply [mod@ver ...]",
@@ -139,11 +141,6 @@ Each entry is built via the remote /go/ endpoint (W9Y env var).
 			client := &http.Client{Timeout: 5 * time.Minute}
 
 			// Collect all manifests
-			type manifestSource struct {
-				data  []byte
-				label string
-				ver   string // resolved version for remote manifests
-			}
 			var sources []manifestSource
 
 			// Local files
@@ -193,110 +190,31 @@ Each entry is built via the remote /go/ endpoint (W9Y env var).
 				sources = append(sources, manifestSource{data: data, label: name + "@" + version, ver: version})
 			}
 
-			// Process each manifest
-			var allErrors []error
-			// Registry bookkeeping: every successfully installed manifest
-			// is recorded (mod name -> entries) and written to the prefix
-			// root once at the end, so w9y itself owns the registry.
-			recorded := map[string]map[string]*RegistryEntry{}
-			recordedVersions := map[string]string{}
-			for _, src := range sources {
-				m, err := ParseManifest(src.label, src.data)
-				if err != nil {
-					allErrors = append(allErrors, fmt.Errorf("%s: parse: %w", src.label, err))
-					continue
-				}
-
-				// Set manifest version from remote ref if not embedded
-				if src.ver != "" && m.Version == "" {
-					m.Version = src.ver
-				}
-
-				modName := m.Module
-				if modName == "" {
-					modName = strings.TrimSuffix(filepath.Base(src.label), filepath.Ext(src.label))
-				}
-				entries := map[string]*RegistryEntry{}
-
-				if verbose {
-					fmt.Fprintf(os.Stderr, "manifest: %s (%d entries)\n", src.label, len(m.Entries))
-				}
-
-				for _, entry := range m.Entries {
-					entryVer := entry.Version
-					if entryVer == "" {
-						entryVer = m.Version
-					}
-					if entryVer == "" {
-						entryVer = "latest"
-					}
-
-					u, err := url.JoinPath(host, "/go", entry.Source+"@"+entryVer)
-					if err != nil {
-						allErrors = append(allErrors, fmt.Errorf("%s: build URL: %w", entry.Output, err))
-						if verbose {
-							fmt.Printf("%s (error: %v)\n", entry.Output, err)
-						}
-						continue
-					}
-
-					dest := filepath.Join(prefix, filepath.FromSlash(entry.Output))
-					if dryRun {
-						fmt.Printf("%s -> %s\n", u, dest)
-						continue
-					}
-
-					ok, err := downloadBlob(client, u, dest)
-					if err != nil {
-						allErrors = append(allErrors, fmt.Errorf("%s: %w", entry.Output, err))
-						if verbose {
-							fmt.Printf("%s (error: %v)\n", entry.Output, err)
-						}
-						continue
-					}
-					if fi, statErr := os.Stat(dest); statErr == nil {
-						entries[entry.Output] = &RegistryEntry{
-							Src:     u,
-							Version: entryVer,
-							Bytes:   fi.Size(),
-						}
-					}
-					if verbose {
-						if ok {
-							fmt.Println(entry.Output)
-						} else {
-							fmt.Printf("%s (cached)\n", entry.Output)
-						}
-					}
-				}
-				if !dryRun && len(entries) > 0 {
-					recorded[modName] = entries
-					recordedVersions[modName] = m.Version
-				}
-			}
-
-			// Persist the registry for every successfully installed mod.
-			if !dryRun && len(recorded) > 0 {
-				reg, err := loadRegistry(prefix)
-				if err != nil {
-					allErrors = append(allErrors, err)
-				} else {
-					for name, entryMap := range recorded {
-						recordMod(reg, name, recordedVersions[name], entryMap)
-					}
-					if err := saveRegistry(prefix, reg); err != nil {
-						allErrors = append(allErrors, err)
-					} else if verbose {
-						fmt.Fprintf(os.Stderr, "registry: %s (%d mods)\n", registryPath(prefix), len(recorded))
+			// TUI vs plain output. The TUI is a Bubble Tea spinner+progress
+			// view over the SAME download loop (see mod_tui.go); plain mode
+			// prints exactly as before so headless callers (GearShell's w9y
+			// orchestrator, scripts, CI) are unaffected. dry-run stays plain
+			// even on a terminal - it only prints what would happen.
+			ctx := context.Background()
+			if !dryRun {
+				switch progress {
+				case "tui":
+					return runApplyTUI(ctx, host, client, sources, prefix, verbose)
+				case "plain":
+					// fall through to the plain loop below
+				default: // auto: TUI only on a real terminal
+					if isTerminal() {
+						return runApplyTUI(ctx, host, client, sources, prefix, verbose)
 					}
 				}
 			}
 
-			if len(allErrors) > 0 {
-				for _, err := range allErrors {
+			res := applySources(ctx, host, client, sources, prefix, dryRun, verbose, nil)
+			if len(res.allErrors) > 0 {
+				for _, err := range res.allErrors {
 					fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				}
-				return fmt.Errorf("%d entries failed", len(allErrors))
+				return fmt.Errorf("%d entries failed", len(res.allErrors))
 			}
 			return nil
 		},
@@ -306,7 +224,183 @@ Each entry is built via the remote /go/ endpoint (W9Y env var).
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show what would be downloaded")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "show per-entry progress (cached/downloaded)")
 	cmd.Flags().StringArrayVarP(&files, "file", "f", nil, "local manifest file (repeatable)")
+	cmd.Flags().StringVar(&progress, "progress", "auto", "apply output: auto (TUI on a terminal, plain otherwise), plain, tui")
 	return cmd
+}
+
+// manifestSource is one input manifest: either a local file or a remote
+// manifest resolved to a version.
+type manifestSource struct {
+	data  []byte
+	label string
+	ver   string // resolved version for remote manifests
+}
+
+// entryPhase marks the lifecycle of one download entry in the progress
+// hook: entryStart (about to download), entryProgress (byte updates),
+// entryDone (finished; ok carries success).
+type entryPhase int
+
+const (
+	entryStart entryPhase = iota
+	entryProgress
+	entryDone
+)
+
+// applySourcesResult is everything the download loop produces: the
+// per-mod registry records and the accumulated errors.
+type applySourcesResult struct {
+	recorded  map[string]map[string]*RegistryEntry
+	versions  map[string]string
+	allErrors []error
+}
+
+// applySources processes every manifest source: parse, download each
+// entry, and persist the registry. Both the plain (headless) path and
+// the TUI path run this same loop; the optional observe hook reports
+// per-entry lifecycle + byte progress to the TUI renderer (nil in plain
+// mode keeps the output byte-identical to before). ctx cancels the loop
+// between entries and each in-flight request.
+func applySources(ctx context.Context, host string, client *http.Client, sources []manifestSource, prefix string, dryRun, verbose bool, observe func(entry applyEntry, phase entryPhase, done, total int64, ok bool)) applySourcesResult {
+	res := applySourcesResult{
+		recorded: map[string]map[string]*RegistryEntry{},
+		versions: map[string]string{},
+	}
+	for _, src := range sources {
+		if err := ctx.Err(); err != nil {
+			res.allErrors = append(res.allErrors, err)
+			break
+		}
+		m, err := ParseManifest(src.label, src.data)
+		if err != nil {
+			res.allErrors = append(res.allErrors, fmt.Errorf("%s: parse: %w", src.label, err))
+			continue
+		}
+
+		// Set manifest version from remote ref if not embedded
+		if src.ver != "" && m.Version == "" {
+			m.Version = src.ver
+		}
+
+		modName := m.Module
+		if modName == "" {
+			modName = strings.TrimSuffix(filepath.Base(src.label), filepath.Ext(src.label))
+		}
+		entries := map[string]*RegistryEntry{}
+
+		if verbose {
+			fmt.Fprintf(os.Stderr, "manifest: %s (%d entries)\n", src.label, len(m.Entries))
+		}
+
+		for _, entry := range m.Entries {
+			if err := ctx.Err(); err != nil {
+				res.allErrors = append(res.allErrors, err)
+				break
+			}
+			entryVer := entry.Version
+			if entryVer == "" {
+				entryVer = m.Version
+			}
+			if entryVer == "" {
+				entryVer = "latest"
+			}
+
+			u, err := url.JoinPath(host, "/go", entry.Source+"@"+entryVer)
+			if err != nil {
+				res.allErrors = append(res.allErrors, fmt.Errorf("%s: build URL: %w", entry.Output, err))
+				if verbose {
+					fmt.Printf("%s (error: %v)\n", entry.Output, err)
+				}
+				continue
+			}
+
+			dest := filepath.Join(prefix, filepath.FromSlash(entry.Output))
+			if dryRun {
+				fmt.Printf("%s -> %s\n", u, dest)
+				continue
+			}
+
+			ae := applyEntry{Label: entry.Output, Mod: modName, URL: u, Dest: dest, Ver: entryVer}
+			if observe != nil {
+				observe(ae, entryStart, 0, 0, false)
+			}
+
+			ok, err := downloadBlob(ctx, client, u, dest, func(done, total int64) {
+				if observe != nil {
+					observe(ae, entryProgress, done, total, false)
+				}
+			})
+			if err != nil {
+				res.allErrors = append(res.allErrors, fmt.Errorf("%s: %w", entry.Output, err))
+				if observe != nil {
+					observe(ae, entryDone, 0, 0, false)
+				}
+				if verbose {
+					fmt.Printf("%s (error: %v)\n", entry.Output, err)
+				}
+				continue
+			}
+			ae.Cached = !ok
+			if fi, statErr := os.Stat(dest); statErr == nil {
+				entries[entry.Output] = &RegistryEntry{
+					Src:     u,
+					Version: entryVer,
+					Bytes:   fi.Size(),
+				}
+			}
+			if observe != nil {
+				observe(ae, entryDone, 0, 0, true)
+			}
+			if verbose {
+				if ok {
+					fmt.Println(entry.Output)
+				} else {
+					fmt.Printf("%s (cached)\n", entry.Output)
+				}
+			}
+		}
+		if !dryRun && len(entries) > 0 {
+			res.recorded[modName] = entries
+			res.versions[modName] = m.Version
+		}
+	}
+
+	// Persist the registry for every successfully installed mod.
+	if !dryRun && len(res.recorded) > 0 {
+		reg, err := loadRegistry(prefix)
+		if err != nil {
+			res.allErrors = append(res.allErrors, err)
+		} else {
+			for name, entryMap := range res.recorded {
+				recordMod(reg, name, res.versions[name], entryMap)
+			}
+			if err := saveRegistry(prefix, reg); err != nil {
+				res.allErrors = append(res.allErrors, err)
+			} else if verbose {
+				fmt.Fprintf(os.Stderr, "registry: %s (%d mods)\n", registryPath(prefix), len(res.recorded))
+			}
+		}
+	}
+	return res
+}
+
+// applyEntry is one download the apply loop performs, shared with the
+// TUI for rendering (and as the progress-hook argument).
+type applyEntry struct {
+	Label  string
+	Mod    string
+	URL    string
+	Dest   string
+	Ver    string
+	Cached bool
+}
+
+// isTerminal reports whether stdout is a character device. A Stat-based
+// check (no build tags) so it is safe under js/wasm, where Stat fails
+// and headless (plain) output is always used.
+func isTerminal() bool {
+	fi, err := os.Stdout.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
 // resolveLatestManifestVersion fetches the version list for a manifest name
@@ -349,7 +443,7 @@ func resolveLatestManifestVersion(client *http.Client, host, name string) (strin
 	return valid[len(valid)-1], nil
 }
 
-func downloadBlob(client *http.Client, url, dest string) (downloaded bool, err error) {
+func downloadBlob(ctx context.Context, client *http.Client, url, dest string, progress func(done, total int64)) (downloaded bool, err error) {
 	// If local file exists, check via HEAD whether it's still current.
 	// The local file is raw wasm bytes (Go's HTTP transport auto-decompresses
 	// Content-Encoding: gzip). The server's ETag is the raw wasm SHA.
@@ -362,7 +456,7 @@ func downloadBlob(client *http.Client, url, dest string) (downloaded bool, err e
 
 		// HEAD request to get server's ETag — only when we already have
 		// a local copy to compare against.
-		headReq, err := http.NewRequest(http.MethodHead, url, nil)
+		headReq, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
 		if err != nil {
 			return false, fmt.Errorf("create HEAD request: %w", err)
 		}
@@ -379,7 +473,7 @@ func downloadBlob(client *http.Client, url, dest string) (downloaded bool, err e
 	}
 
 	// Download
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return false, fmt.Errorf("create request: %w", err)
 	}
@@ -403,10 +497,40 @@ func downloadBlob(client *http.Client, url, dest string) (downloaded bool, err e
 	}
 	defer f.Close()
 
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	body := resp.Body
+	if progress != nil {
+		body = &progressReader{r: resp.Body, total: resp.ContentLength, fn: progress}
+	}
+	if _, err := io.Copy(f, body); err != nil {
 		return false, err
 	}
+	if progress != nil {
+		progress(resp.ContentLength, resp.ContentLength)
+	}
 	return true, f.Close()
+}
+
+// progressReader wraps an http response body and reports byte progress
+// through a callback (used by the apply TUI's progress bars). It is a
+// no-op when the callback is nil, which keeps the plain path identical.
+type progressReader struct {
+	r     io.ReadCloser
+	total int64
+	fn    func(done, total int64)
+	n     int64
+}
+
+func (p *progressReader) Read(buf []byte) (int, error) {
+	n, err := p.r.Read(buf)
+	p.n += int64(n)
+	if p.fn != nil && n > 0 {
+		p.fn(p.n, p.total)
+	}
+	return n, err
+}
+
+func (p *progressReader) Close() error {
+	return p.r.Close()
 }
 
 func formatManifest(m *Manifest) []byte {
