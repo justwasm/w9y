@@ -45,6 +45,8 @@ Commands:
 	cmd.AddCommand(newModApplyCommand())
 	cmd.AddCommand(newModUploadCommand())
 	cmd.AddCommand(newModListCommand())
+	cmd.AddCommand(newModListInstalledCommand())
+	cmd.AddCommand(newModRemoveCommand())
 
 	return cmd
 }
@@ -193,6 +195,11 @@ Each entry is built via the remote /go/ endpoint (W9Y env var).
 
 			// Process each manifest
 			var allErrors []error
+			// Registry bookkeeping: every successfully installed manifest
+			// is recorded (mod name -> entries) and written to the prefix
+			// root once at the end, so w9y itself owns the registry.
+			recorded := map[string]map[string]*RegistryEntry{}
+			recordedVersions := map[string]string{}
 			for _, src := range sources {
 				m, err := ParseManifest(src.label, src.data)
 				if err != nil {
@@ -204,6 +211,12 @@ Each entry is built via the remote /go/ endpoint (W9Y env var).
 				if src.ver != "" && m.Version == "" {
 					m.Version = src.ver
 				}
+
+				modName := m.Module
+				if modName == "" {
+					modName = strings.TrimSuffix(filepath.Base(src.label), filepath.Ext(src.label))
+				}
+				entries := map[string]*RegistryEntry{}
 
 				if verbose {
 					fmt.Fprintf(os.Stderr, "manifest: %s (%d entries)\n", src.label, len(m.Entries))
@@ -241,12 +254,40 @@ Each entry is built via the remote /go/ endpoint (W9Y env var).
 						}
 						continue
 					}
+					if fi, statErr := os.Stat(dest); statErr == nil {
+						entries[entry.Output] = &RegistryEntry{
+							Src:     u,
+							Version: entryVer,
+							Bytes:   fi.Size(),
+						}
+					}
 					if verbose {
 						if ok {
 							fmt.Println(entry.Output)
 						} else {
 							fmt.Printf("%s (cached)\n", entry.Output)
 						}
+					}
+				}
+				if !dryRun && len(entries) > 0 {
+					recorded[modName] = entries
+					recordedVersions[modName] = m.Version
+				}
+			}
+
+			// Persist the registry for every successfully installed mod.
+			if !dryRun && len(recorded) > 0 {
+				reg, err := loadRegistry(prefix)
+				if err != nil {
+					allErrors = append(allErrors, err)
+				} else {
+					for name, entryMap := range recorded {
+						recordMod(reg, name, recordedVersions[name], entryMap)
+					}
+					if err := saveRegistry(prefix, reg); err != nil {
+						allErrors = append(allErrors, err)
+					} else if verbose {
+						fmt.Fprintf(os.Stderr, "registry: %s (%d mods)\n", registryPath(prefix), len(recorded))
 					}
 				}
 			}
@@ -576,4 +617,81 @@ func (s *ManifestStore) List() (map[string][]string, error) {
 		}
 	}
 	return result, nil
+}
+
+func newModListInstalledCommand() *cobra.Command {
+	var prefix string
+
+	cmd := &cobra.Command{
+		Use:   "list-installed",
+		Short: "List mods installed by w9y mod apply (reads w9y-registry.json)",
+		Args:  cobra.NoArgs,
+		RunE: func(c *cobra.Command, args []string) error {
+			if prefix == "" {
+				return fmt.Errorf("prefix required: set --prefix or $WANIX")
+			}
+			reg, err := loadRegistry(prefix)
+			if err != nil {
+				return err
+			}
+			if len(reg.Mods) == 0 {
+				fmt.Println("no mods installed")
+				return nil
+			}
+			fmt.Printf("%-24s %-12s %-8s %s\n", "MOD", "VERSION", "ENTRIES", "INSTALLED_AT")
+			for name, rec := range reg.Mods {
+				fmt.Printf("%-24s %-12s %-8d %s\n", name, rec.Version, len(rec.Entries), rec.InstalledAt)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&prefix, "prefix", cmp.Or(os.Getenv("WANIX"), ""), "output directory (defaults to $WANIX)")
+	return cmd
+}
+
+func newModRemoveCommand() *cobra.Command {
+	var prefix string
+
+	cmd := &cobra.Command{
+		Use:   "remove <mod> [mod ...]",
+		Short: "Remove installed mods (files + registry records)",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			if prefix == "" {
+				return fmt.Errorf("prefix required: set --prefix or $WANIX")
+			}
+			reg, err := loadRegistry(prefix)
+			if err != nil {
+				return err
+			}
+			var allErrors []error
+			for _, name := range args {
+				rec, ok := reg.Mods[name]
+				if !ok {
+					fmt.Fprintf(os.Stderr, "mod %s: not installed\n", name)
+					continue
+				}
+				if err := deleteModFiles(prefix, rec); err != nil {
+					allErrors = append(allErrors, fmt.Errorf("%s: %w", name, err))
+					continue
+				}
+				delete(reg.Mods, name)
+				fmt.Printf("removed %s (%d files)\n", name, len(rec.Entries))
+			}
+			if err := saveRegistry(prefix, reg); err != nil {
+				allErrors = append(allErrors, err)
+			}
+			if len(allErrors) > 0 {
+				for _, err := range allErrors {
+					fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				}
+				return fmt.Errorf("%d errors", len(allErrors))
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&prefix, "prefix", cmp.Or(os.Getenv("WANIX"), ""), "output directory (defaults to $WANIX)")
+	return cmd
 }
