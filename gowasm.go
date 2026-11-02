@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -229,19 +230,42 @@ type buildResult struct {
 }
 
 // GoWasmBuilder builds Go WASM binaries on demand and deduplicates
-// concurrent builds for the same remotePath.
+// concurrent builds for the same remotePath, while bounding total concurrent builds.
 type GoWasmBuilder struct {
 	BlobStore
-	mu     sync.Mutex
-	builds map[string][]chan buildResult // remotePath → waiters
+	mu       sync.Mutex
+	builds   map[string][]chan buildResult // remotePath → waiters
+	buildSem chan struct{}                 // limits concurrent builds across different paths
 }
 
 // NewGoWasmBuilder creates a new GoWasmBuilder.
 func NewGoWasmBuilder(store BlobStore) *GoWasmBuilder {
+	limit := 1
+	if s := os.Getenv("MAX_CONCURRENT_BUILDS"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			limit = n
+		}
+	}
 	return &GoWasmBuilder{
 		BlobStore: store,
 		builds:    make(map[string][]chan buildResult),
+		buildSem:  make(chan struct{}, limit),
 	}
+}
+
+func (b *GoWasmBuilder) sem() chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.buildSem == nil {
+		limit := 1
+		if s := os.Getenv("MAX_CONCURRENT_BUILDS"); s != "" {
+			if n, err := strconv.Atoi(s); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		b.buildSem = make(chan struct{}, limit)
+	}
+	return b.buildSem
 }
 
 // BuildOrWait checks the cache first. If already built, returns immediately.
@@ -271,6 +295,37 @@ func (b *GoWasmBuilder) BuildOrWait(importPath, version, remotePath string, reqC
 	// We are the builder
 	b.builds[remotePath] = []chan buildResult{ch}
 	b.mu.Unlock()
+
+	// Acquire build semaphore
+	select {
+	case b.sem() <- struct{}{}:
+		defer func() { <-b.sem() }()
+	case <-reqCtx.Done():
+		b.mu.Lock()
+		waiters := b.builds[remotePath]
+		delete(b.builds, remotePath)
+		b.mu.Unlock()
+
+		res := buildResult{err: reqCtx.Err()}
+		for _, w := range waiters {
+			w <- res
+		}
+		return "", reqCtx.Err()
+	}
+
+	// Check mapping again in case another build finished while waiting for the semaphore
+	if e, err := b.Get(remotePath); err == nil {
+		b.mu.Lock()
+		waiters := b.builds[remotePath]
+		delete(b.builds, remotePath)
+		b.mu.Unlock()
+
+		res := buildResult{sha: e.Hash}
+		for _, w := range waiters {
+			w <- res
+		}
+		return e.Hash, nil
+	}
 
 	// Do the build
 	sha, err := b.doBuild(reqCtx, importPath, version, remotePath)

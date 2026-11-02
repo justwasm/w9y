@@ -3,6 +3,7 @@ package w9y
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestUploadStoresBlobAndMappingEntry(t *testing.T) {
@@ -967,4 +969,25 @@ func TestFormatManifest(t *testing.T) {
 	if len(m2.Entries) != 3 {
 		t.Fatalf("entries = %d, want 3", len(m2.Entries))
 	}
+}
+
+func TestGoWasmBuilderConcurrencyLimit(t *testing.T) {
+	dir := t.TempDir()
+	store := NewBlobStore(dir)
+	builder := NewGoWasmBuilder(store)
+
+	// Acquire the single semaphore slot manually
+	builder.sem() <- struct{}{}
+
+	// A build attempt should block and respect context cancellation
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := builder.BuildOrWait("github.com/example/test", "v1.0.0", "/go/github.com/example/test@v1.0.0", ctx)
+	if err == nil {
+		t.Fatal("expected build to fail on cancelled context when semaphore is full")
+	}
+
+	// Release semaphore slot
+	<-builder.sem()
 }

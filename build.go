@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -210,7 +212,18 @@ func buildGoModule(ctx context.Context, modDir string, subPkg string, tmpDir str
 		buildCmd.Dir = buildDir
 		buildCmd.Env = append(os.Environ(), "GOWORK=off")
 	} else {
-		args := []string{"build", "-trimpath", "-ldflags", "-s -w", "-o", wasmPath, "."}
+		p := getenv("BUILD_P", "")
+		if p == "" {
+			p = getenv("GOMAXPROCS", "")
+		}
+		if p == "" {
+			n := runtime.NumCPU()
+			if n > 4 {
+				n = 4
+			}
+			p = strconv.Itoa(n)
+		}
+		args := []string{"build", "-p", p, "-trimpath", "-ldflags", "-s -w", "-o", wasmPath, "."}
 		slog.Info("go "+strings.Join(args, " "), "dir", buildDir)
 		buildCmd = exec.CommandContext(ctx, "go", args...)
 		buildCmd.Dir = buildDir
@@ -219,6 +232,7 @@ func buildGoModule(ctx context.Context, modDir string, subPkg string, tmpDir str
 			"GOARCH=wasm",
 			"GOWORK=off",
 			"CGO_ENABLED=0",
+			"GOMAXPROCS="+p,
 		)
 	}
 	buildCmd.Stderr = new(bytes.Buffer)

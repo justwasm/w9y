@@ -29,6 +29,8 @@ func newEnvCommand() *cobra.Command {
 				{"GITHUB_CLIENT_SECRET", mask(getenv("GITHUB_CLIENT_SECRET", "")), "", "GitHub OAuth App client secret (enables web login)"},
 				{"W9Y_SESSION_SECRET", mask(getenv("W9Y_SESSION_SECRET", "")), "", "HMAC signing key for web session cookies (enables web login)"},
 				{"HOST", getenv("HOST", ""), "", "Public host of this server. Used to build the OAuth redirect_uri. If empty, auto-built from X-Forwarded-Host (or Host) on each request."},
+				{"MAX_CONCURRENT_BUILDS", getenv("MAX_CONCURRENT_BUILDS", ""), "1", "Maximum number of concurrent Go WASM builds on the server"},
+				{"BUILD_P", getenv("BUILD_P", ""), "4 (or GOMAXPROCS)", "Compiler parallelism (-p) for go build"},
 			}
 
 			for _, v := range vars {

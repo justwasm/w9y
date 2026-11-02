@@ -84,6 +84,37 @@ func (b *GoWasmBuilder) TinyBuildOrWait(importPath, version, remotePath string, 
 	b.builds[remotePath] = []chan buildResult{ch}
 	b.mu.Unlock()
 
+	// Acquire build semaphore
+	select {
+	case b.sem() <- struct{}{}:
+		defer func() { <-b.sem() }()
+	case <-reqCtx.Done():
+		b.mu.Lock()
+		waiters := b.builds[remotePath]
+		delete(b.builds, remotePath)
+		b.mu.Unlock()
+
+		res := buildResult{err: reqCtx.Err()}
+		for _, w := range waiters {
+			w <- res
+		}
+		return "", reqCtx.Err()
+	}
+
+	// Check mapping again in case another build finished while waiting for the semaphore
+	if e, err := b.Get(remotePath); err == nil {
+		b.mu.Lock()
+		waiters := b.builds[remotePath]
+		delete(b.builds, remotePath)
+		b.mu.Unlock()
+
+		res := buildResult{sha: e.Hash}
+		for _, w := range waiters {
+			w <- res
+		}
+		return e.Hash, nil
+	}
+
 	sha, err := b.doTinyBuild(reqCtx, importPath, version, remotePath)
 
 	b.mu.Lock()
