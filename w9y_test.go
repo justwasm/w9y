@@ -971,23 +971,88 @@ func TestFormatManifest(t *testing.T) {
 	}
 }
 
-func TestGoWasmBuilderConcurrencyLimit(t *testing.T) {
+func TestBuildQueueEnqueueAndDedup(t *testing.T) {
+	dir := t.TempDir()
+	store := NewBlobStore(dir)
+	jobs := NewJobStore()
+	builder := NewGoWasmBuilder(store, jobs)
+
+	remotePath := "/go/example.com/mod@v1.0.0"
+	ctx, cancel := context.WithCancel(context.Background())
+
+	errCh1 := make(chan error, 1)
+	errCh2 := make(chan error, 1)
+
+	// Launch two concurrent requests for the same package
+	go func() {
+		_, err := builder.BuildOrWait("example.com/mod", "v1.0.0", remotePath, ctx)
+		errCh1 <- err
+	}()
+	go func() {
+		_, err := builder.BuildOrWait("example.com/mod", "v1.0.0", remotePath, ctx)
+		errCh2 <- err
+	}()
+
+	// Give goroutines a moment to enqueue
+	time.Sleep(20 * time.Millisecond)
+
+	// Both requests must be deduplicated into a single in-flight task
+	if count := builder.InFlightCount(); count != 1 {
+		t.Fatalf("expected 1 in-flight task, got %d", count)
+	}
+
+	// Cancel context to unblock
+	cancel()
+
+	err1 := <-errCh1
+	err2 := <-errCh2
+
+	if !errors.Is(err1, context.Canceled) || !errors.Is(err2, context.Canceled) {
+		t.Fatalf("expected context.Canceled for both, got %v and %v", err1, err2)
+	}
+}
+
+func TestBuildQueueEnqueueJobCached(t *testing.T) {
+	dir := t.TempDir()
+	store := NewBlobStore(dir)
+	jobs := NewJobStore()
+	builder := NewGoWasmBuilder(store, jobs)
+
+	// Pre-populate store
+	raw := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
+	sha := sha256Hex(raw)
+	gz := mustGzip(t, raw)
+	gzPath := blobPath(dir, sha, true)
+	if err := os.MkdirAll(filepath.Dir(gzPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gzPath, gz, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set("/go/example.com/cached@v1.0.0", sha); err != nil {
+		t.Fatal(err)
+	}
+
+	job, err := builder.EnqueueJob("example.com/cached@v1.0.0", "go")
+	if err != nil {
+		t.Fatalf("EnqueueJob: %v", err)
+	}
+	if job.Status != "done" {
+		t.Fatalf("expected status done for cached package, got %s", job.Status)
+	}
+}
+
+func TestBuildQueueContextCancel(t *testing.T) {
 	dir := t.TempDir()
 	store := NewBlobStore(dir)
 	builder := NewGoWasmBuilder(store)
 
-	// Acquire the single semaphore slot manually
-	builder.sem() <- struct{}{}
+	// Pre-cancel context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 
-	// A build attempt should block and respect context cancellation
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-
-	_, err := builder.BuildOrWait("github.com/example/test", "v1.0.0", "/go/github.com/example/test@v1.0.0", ctx)
-	if err == nil {
-		t.Fatal("expected build to fail on cancelled context when semaphore is full")
+	_, err := builder.BuildOrWait("github.com/example/timeout", "v1.0.0", "/go/github.com/example/timeout@v1.0.0", ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
 	}
-
-	// Release semaphore slot
-	<-builder.sem()
 }

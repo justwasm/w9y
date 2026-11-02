@@ -2,7 +2,6 @@ package w9y
 
 import (
 	"cmp"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,8 +22,8 @@ import (
 // NewServer returns the w9y HTTP handler.
 func NewServer(dataDir string) http.Handler {
 	store := NewBlobStore(dataDir)
-	builder := NewGoWasmBuilder(store)
 	jobs := NewJobStore()
+	builder := NewGoWasmBuilder(store, jobs)
 	mstore := NewManifestStore(dataDir)
 	return withCORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodOptions {
@@ -751,9 +750,11 @@ func handleBuildStart(w http.ResponseWriter, r *http.Request, builder *GoWasmBui
 		req.Runtime = "go"
 	}
 
-	job := jobs.Create(req.Spec, req.Runtime)
-
-	go runBuildJob(job, builder, jobs)
+	job, err := builder.EnqueueJob(req.Spec, req.Runtime)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
@@ -768,49 +769,4 @@ func handleBuildPoll(w http.ResponseWriter, jobID string, jobs *JobStore) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(job)
-}
-
-func runBuildJob(job *BuildJob, builder *GoWasmBuilder, jobs *JobStore) {
-	importPath, version, ok := strings.Cut(job.Spec, "@")
-	if !ok || importPath == "" {
-		jobs.SetError(job.ID, "spec must be pkg@version")
-		return
-	}
-	if version == "" {
-		version = "latest"
-	}
-
-	prefix := "/" + job.Runtime + "/"
-	remotePath := prefix + job.Spec
-
-	// Resolve non-canonical versions (latest, main, commit hashes)
-	buildVersion := version
-	resolved, err := resolveSpec(context.Background(), importPath, version)
-	if err == nil && resolved.Version != version {
-		canonical := prefix + importPath + "@" + resolved.Version
-		_ = builder.SetAlias(remotePath, canonical)
-		remotePath = canonical
-		buildVersion = resolved.Version
-		jobs.SetResolved(job.ID, importPath+"@"+resolved.Version)
-		slog.Info("resolved version", "from", version, "to", resolved.Version, "pkg", importPath)
-	} else if err != nil {
-		slog.Warn("could not resolve version, building with original ref",
-			"import_path", importPath, "version", version, "error", err)
-		jobs.SetBuilding(job.ID)
-	} else {
-		jobs.SetBuilding(job.ID)
-	}
-
-	var sha string
-	if job.Runtime == "tinygo" {
-		sha, err = builder.TinyBuildOrWait(importPath, buildVersion, remotePath, context.Background())
-	} else {
-		sha, err = builder.BuildOrWait(importPath, buildVersion, remotePath, context.Background())
-	}
-	if err != nil {
-		jobs.SetError(job.ID, err.Error())
-		return
-	}
-
-	jobs.SetDone(job.ID, fmt.Sprintf("built %s -> blob/%s.wasm.gz", remotePath, sha))
 }

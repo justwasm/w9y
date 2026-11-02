@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -229,49 +230,133 @@ type buildResult struct {
 	err error
 }
 
-// GoWasmBuilder builds Go WASM binaries on demand and deduplicates
-// concurrent builds for the same remotePath, while bounding total concurrent builds.
+type buildTask struct {
+	spec       string
+	runtime    string // "go" or "tinygo"
+	importPath string
+	version    string
+	remotePath string
+	jobs       []*BuildJob
+	waiters    []chan buildResult
+}
+
+// GoWasmBuilder builds Go WASM binaries on demand via an internal FIFO queue
+// and worker pool, deduplicating in-flight builds for the same remotePath.
 type GoWasmBuilder struct {
 	BlobStore
+	jobs     *JobStore
 	mu       sync.Mutex
-	builds   map[string][]chan buildResult // remotePath → waiters
-	buildSem chan struct{}                 // limits concurrent builds across different paths
+	inFlight map[string]*buildTask
+	queue    chan *buildTask
 }
 
-// NewGoWasmBuilder creates a new GoWasmBuilder.
-func NewGoWasmBuilder(store BlobStore) *GoWasmBuilder {
-	limit := 1
+// NewGoWasmBuilder creates a new GoWasmBuilder with an internal queue and worker pool.
+func NewGoWasmBuilder(store BlobStore, jobs ...*JobStore) *GoWasmBuilder {
+	var js *JobStore
+	if len(jobs) > 0 && jobs[0] != nil {
+		js = jobs[0]
+	} else {
+		js = NewJobStore()
+	}
+
+	workers := 1
 	if s := os.Getenv("MAX_CONCURRENT_BUILDS"); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 {
-			limit = n
+			workers = n
 		}
 	}
-	return &GoWasmBuilder{
+
+	b := &GoWasmBuilder{
 		BlobStore: store,
-		builds:    make(map[string][]chan buildResult),
-		buildSem:  make(chan struct{}, limit),
+		jobs:      js,
+		inFlight:  make(map[string]*buildTask),
+		queue:     make(chan *buildTask, 1024),
 	}
+
+	for i := 0; i < workers; i++ {
+		go b.workerLoop()
+	}
+
+	return b
 }
 
-func (b *GoWasmBuilder) sem() chan struct{} {
+func (b *GoWasmBuilder) Jobs() *JobStore {
+	return b.jobs
+}
+
+func (b *GoWasmBuilder) QueueLen() int {
+	return len(b.queue)
+}
+
+func (b *GoWasmBuilder) InFlightCount() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.buildSem == nil {
-		limit := 1
-		if s := os.Getenv("MAX_CONCURRENT_BUILDS"); s != "" {
-			if n, err := strconv.Atoi(s); err == nil && n > 0 {
-				limit = n
-			}
-		}
-		b.buildSem = make(chan struct{}, limit)
-	}
-	return b.buildSem
+	return len(b.inFlight)
 }
 
-// BuildOrWait checks the cache first. If already built, returns immediately.
-// Otherwise, it either becomes the builder or waits for the in-flight build.
-func (b *GoWasmBuilder) BuildOrWait(importPath, version, remotePath string, reqCtx context.Context) (string, error) {
-	// Fast path: check mapping before taking any locks
+func (b *GoWasmBuilder) workerLoop() {
+	for task := range b.queue {
+		b.runTask(task)
+	}
+}
+
+func (b *GoWasmBuilder) runTask(task *buildTask) {
+	b.mu.Lock()
+	if len(task.waiters) == 0 && len(task.jobs) == 0 {
+		delete(b.inFlight, task.remotePath)
+		b.mu.Unlock()
+		return
+	}
+	b.mu.Unlock()
+
+	// Check if already in cache before starting build
+	if e, err := b.Get(task.remotePath); err == nil {
+		b.finishTask(task, e.Hash, nil)
+		return
+	}
+
+	// Update job statuses to building
+	for _, job := range task.jobs {
+		b.jobs.SetBuilding(job.ID)
+	}
+
+	// Execute build with generous timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	var sha string
+	var err error
+	if task.runtime == "tinygo" {
+		sha, err = b.doTinyBuild(ctx, task.importPath, task.version, task.remotePath)
+	} else {
+		sha, err = b.doBuild(ctx, task.importPath, task.version, task.remotePath)
+	}
+
+	b.finishTask(task, sha, err)
+}
+
+func (b *GoWasmBuilder) finishTask(task *buildTask, sha string, err error) {
+	b.mu.Lock()
+	delete(b.inFlight, task.remotePath)
+	waiters := task.waiters
+	b.mu.Unlock()
+
+	for _, job := range task.jobs {
+		if err != nil {
+			b.jobs.SetError(job.ID, err.Error())
+		} else {
+			b.jobs.SetDone(job.ID, fmt.Sprintf("built %s -> blob/%s.wasm.gz", task.remotePath, sha))
+		}
+	}
+
+	res := buildResult{sha: sha, err: err}
+	for _, w := range waiters {
+		w <- res
+	}
+}
+
+func (b *GoWasmBuilder) buildOrWait(runtime, importPath, version, remotePath string, reqCtx context.Context) (string, error) {
+	// Fast path: check cache before locking
 	if e, err := b.Get(remotePath); err == nil {
 		return e.Hash, nil
 	}
@@ -279,68 +364,126 @@ func (b *GoWasmBuilder) BuildOrWait(importPath, version, remotePath string, reqC
 	ch := make(chan buildResult, 1)
 
 	b.mu.Lock()
-	if waiters, exists := b.builds[remotePath]; exists {
-		// Someone else is building — join their waitlist
-		b.builds[remotePath] = append(waiters, ch)
+	// Check cache under lock
+	if e, err := b.Get(remotePath); err == nil {
+		b.mu.Unlock()
+		return e.Hash, nil
+	}
+
+	// If already in flight, join waiters
+	if task, exists := b.inFlight[remotePath]; exists {
+		task.waiters = append(task.waiters, ch)
 		b.mu.Unlock()
 
 		select {
 		case res := <-ch:
 			return res.sha, res.err
 		case <-reqCtx.Done():
+			b.removeWaiter(remotePath, ch)
 			return "", reqCtx.Err()
 		}
 	}
 
-	// We are the builder
-	b.builds[remotePath] = []chan buildResult{ch}
+	// Create new task and enqueue
+	task := &buildTask{
+		spec:       importPath + "@" + version,
+		runtime:    runtime,
+		importPath: importPath,
+		version:    version,
+		remotePath: remotePath,
+		waiters:    []chan buildResult{ch},
+	}
+	b.inFlight[remotePath] = task
 	b.mu.Unlock()
 
-	// Acquire build semaphore
-	select {
-	case b.sem() <- struct{}{}:
-		defer func() { <-b.sem() }()
-	case <-reqCtx.Done():
-		b.mu.Lock()
-		waiters := b.builds[remotePath]
-		delete(b.builds, remotePath)
-		b.mu.Unlock()
+	b.queue <- task
 
-		res := buildResult{err: reqCtx.Err()}
-		for _, w := range waiters {
-			w <- res
-		}
+	select {
+	case res := <-ch:
+		return res.sha, res.err
+	case <-reqCtx.Done():
+		b.removeWaiter(remotePath, ch)
 		return "", reqCtx.Err()
 	}
+}
 
-	// Check mapping again in case another build finished while waiting for the semaphore
-	if e, err := b.Get(remotePath); err == nil {
-		b.mu.Lock()
-		waiters := b.builds[remotePath]
-		delete(b.builds, remotePath)
-		b.mu.Unlock()
-
-		res := buildResult{sha: e.Hash}
-		for _, w := range waiters {
-			w <- res
+func (b *GoWasmBuilder) removeWaiter(remotePath string, ch chan buildResult) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	task, exists := b.inFlight[remotePath]
+	if !exists {
+		return
+	}
+	for i, w := range task.waiters {
+		if w == ch {
+			task.waiters = append(task.waiters[:i], task.waiters[i+1:]...)
+			break
 		}
-		return e.Hash, nil
+	}
+}
+
+// BuildOrWait checks the cache first. If already built, returns immediately.
+// Otherwise, it submits a task to the build queue and waits for the worker to complete it.
+func (b *GoWasmBuilder) BuildOrWait(importPath, version, remotePath string, reqCtx context.Context) (string, error) {
+	return b.buildOrWait("go", importPath, version, remotePath, reqCtx)
+}
+
+// TinyBuildOrWait is like BuildOrWait but uses TinyGo to build.
+func (b *GoWasmBuilder) TinyBuildOrWait(importPath, version, remotePath string, reqCtx context.Context) (string, error) {
+	return b.buildOrWait("tinygo", importPath, version, remotePath, reqCtx)
+}
+
+// EnqueueJob creates a BuildJob and queues it for asynchronous execution by the worker pool.
+func (b *GoWasmBuilder) EnqueueJob(spec, runtime string) (*BuildJob, error) {
+	importPath, version, ok := strings.Cut(spec, "@")
+	if !ok || importPath == "" {
+		return nil, errors.New("spec must be pkg@version")
+	}
+	if version == "" {
+		version = "latest"
 	}
 
-	// Do the build
-	sha, err := b.doBuild(reqCtx, importPath, version, remotePath)
+	prefix := "/" + runtime + "/"
+	remotePath := prefix + spec
 
-	// Collect all waiters and signal them
+	// Fast path: if already cached
+	if e, err := b.Get(remotePath); err == nil {
+		job := b.jobs.Create(spec, runtime)
+		b.jobs.SetDone(job.ID, fmt.Sprintf("built %s -> blob/%s.wasm.gz", remotePath, e.Hash))
+		return job, nil
+	}
+
 	b.mu.Lock()
-	waiters := b.builds[remotePath]
-	delete(b.builds, remotePath)
+	// Check cache under lock
+	if e, err := b.Get(remotePath); err == nil {
+		b.mu.Unlock()
+		job := b.jobs.Create(spec, runtime)
+		b.jobs.SetDone(job.ID, fmt.Sprintf("built %s -> blob/%s.wasm.gz", remotePath, e.Hash))
+		return job, nil
+	}
+
+	job := b.jobs.Create(spec, runtime)
+
+	// If already in flight, attach this job
+	if task, exists := b.inFlight[remotePath]; exists {
+		task.jobs = append(task.jobs, job)
+		b.mu.Unlock()
+		return job, nil
+	}
+
+	task := &buildTask{
+		spec:       spec,
+		runtime:    runtime,
+		importPath: importPath,
+		version:    version,
+		remotePath: remotePath,
+		jobs:       []*BuildJob{job},
+	}
+	b.inFlight[remotePath] = task
 	b.mu.Unlock()
 
-	res := buildResult{sha: sha, err: err}
-	for _, w := range waiters {
-		w <- res
-	}
-	return sha, err
+	b.queue <- task
+	return job, nil
 }
 
 // doBuildGoWasm runs the actual Go build, stores the result, and returns the SHA.
